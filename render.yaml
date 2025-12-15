@@ -3,15 +3,20 @@ services:
     name: warframe-lfg-bot
     env: python
     buildCommand: |
+      pip install --upgrade pip
       pip install -r requirements.txt
-      playwright install chromium
+      python -m playwright install chromium
       playwright install-deps
-    startCommand: python main.py
+    startCommand: python3 main.py
     envVars:
       - key: BOT_TOKEN
         sync: false
       - key: RENDER_URL
         sync: false
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
+      - key: PYTHON_VERSION
+        value: "3.12.9"
     plan: free
     autoDeploy: true
     healthCheckPath: /health
