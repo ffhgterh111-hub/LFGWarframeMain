@@ -37,6 +37,17 @@ RENDER_URL = os.getenv('RENDER_URL', '')
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не установлен. Проверьте переменные окружения.")
 
+# Создаем бота ДО всех декораторов команд
+intents = discord.Intents.default()
+intents.emojis_and_stickers = True
+intents.message_content = True
+intents.guilds = True
+
+bot = commands.Bot(command_prefix='!', intents=intents)
+
+# Удаляем стандартную команду help, чтобы использовать свою
+bot.remove_command('help')
+
 # URL-ы для мониторинга
 ARBY_URL = 'https://browse.wf/arbys#days=30&tz=utc&hourfmt=24'
 FISSURE_URL = 'https://browse.wf/live'
@@ -372,7 +383,7 @@ def extract_faction_from_mission_description(description: str) -> Optional[str]:
             return 'Корпус'
         elif 'орокин' in faction_candidate_lower or 'corrupted' in faction_candidate_lower:
             return 'Орокин'
-        elif 'шепот' in faction_candidate_lower or 'murmur' in faction_candidate_lower:
+        elif 'шепот' в faction_candidate_lower or 'murmur' в faction_candidate_lower:
             return 'Шёпот'
 
     # Ищем просто в тексте без скобок
@@ -2119,7 +2130,306 @@ async def handle_monitor_update(new_data: Dict[str, Any]):
     if changed_types:
         print(f"[{time.strftime('%H:%M:%S')}] 📢 Обнаружены изменения в: {', '.join(changed_types)}")
 
-# 8.4. КОМАНДА ДЛЯ УПРАВЛЕНИЯ МОНИТОРИНГОМ
+# =================================================================
+# 9. КОМАНДЫ БОТА
+# =================================================================
+
+@bot.command(name='command', aliases=['commands', 'help'])
+async def command_list(ctx):
+    """Показывает список всех доступных команд бота."""
+    embed = discord.Embed(
+        title="📚 Список команд бота",
+        description="Все доступные команды для управления ботом",
+        color=0x00CCFF
+    )
+
+    # Настройка каналов
+    embed.add_field(
+        name="⚙️ Настройка каналов (требует прав управлять сервером)",
+        value=(
+            "`!set_arbitration_channel` - Установить текущий канал для Арбитражей\n"
+            "`!set_normal_ruptures` - Установить канал для обычных Разрывов\n"
+            "`!set_steel_path_ruptures` - Установить канал для Разрывов Стального Пути\n"
+            "`!set_lfg_channel [канал]` - Установить канал для поиска пати (LFG)\n"
+            "`!set_log_channel [канал]` - Установить канал для логов и мониторинга"
+        ),
+        inline=False
+    )
+
+    # Настройка ролей
+    embed.add_field(
+        name="👥 Настройка ролей (требует прав управлять сервером)",
+        value=(
+            "`!set_arbitrage_role @роль` - Установить роль для пинга арбитража\n"
+            "`!set_cascade_role @роль` - Установить роль для пинга каскада\n"
+            "`!set_map_role название_карты @роль` - Установить роль для конкретной карты"
+        ),
+        inline=False
+    )
+
+    # Информационные команды
+    embed.add_field(
+        name="📊 Информационные команды",
+        value=(
+            "`!status` - Показать состояние бота и настройки\n"
+            "`!command` или `!commands` или `!help` - Показать этот список команд\n"
+            "`!force_update` - Принудительно обновить все каналы\n"
+            "`!ping_self` - Пингнуть себя для предотвращения сна (Render.com)\n"
+            "`!monitor_status` - Показать статус постоянного мониторинга"
+        ),
+        inline=False
+    )
+
+    # Общие команды
+    embed.add_field(
+        name="🎮 Команды для всех пользователей",
+        value=(
+            "• Нажмите кнопки под сообщениями в каналах:\n"
+            "  - **Арбитраж**: 'Создать пати на Арбитраж' или 'На текущий арбитраж'\n"
+            "  - **Разрывы**: Выберите миссию из выпадающего списка\n"
+            "• В тикете LFG можно:\n"
+            "  - Занять свободные слоты\n"
+            "  - Добавить комментарий\n"
+            "  - Покинуть слот\n"
+            "  - Закрыть тикет (только создатель)"
+        ),
+        inline=False
+    )
+
+    embed.set_footer(text=f"Бот автоматически обновляет данные каждые {MONITOR_INTERVAL_SECONDS} секунд")
+
+    await ctx.send(embed=embed)
+
+@bot.command(name='set_arbitration_channel')
+@commands.has_permissions(manage_guild=True)
+async def set_arbitration_channel(ctx):
+    """Устанавливает текущий канал как канал Расписания Арбитражей."""
+    CONFIG['ARBITRATION_CHANNEL_ID'] = ctx.channel.id
+    save_config()
+
+    await update_arbitration_channel(bot)
+    await ctx.send(f"✅ Канал **Расписания Арбитражей** установлен на: {ctx.channel.mention} и запущен.", delete_after=10)
+
+@bot.command(name='set_normal_ruptures')
+@commands.has_permissions(manage_guild=True)
+async def set_normal_fissure_channel(ctx):
+    """Устанавливает текущий канал как канал Обычных Разрывов."""
+    CONFIG['FISSURE_CHANNEL_ID'] = ctx.channel.id
+    save_config()
+
+    await update_normal_fissure_channel(bot)
+    await ctx.send(f"✅ Канал **Обычных Разрывов** установлен на: {ctx.channel.mention} и запущен.", delete_after=10)
+
+@bot.command(name='set_steel_path_ruptures')
+@commands.has_permissions(manage_guild=True)
+async def set_steel_path_channel(ctx):
+    """Устанавливает текущий канал как канал Разрывов Пути Стали."""
+    CONFIG['STEEL_PATH_CHANNEL_ID'] = ctx.channel.id
+    save_config()
+
+    await update_steel_path_channel(bot)
+    await ctx.send(f"✅ Канал **Разрывов Пути Стали** установлен на: {ctx.channel.mention} и запущен.", delete_after=10)
+
+@bot.command(name='set_lfg_channel')
+@commands.has_permissions(manage_guild=True)
+async def set_lfg_channel(ctx, channel: discord.TextChannel = None):
+    """Устанавливает канал для поиска пати (LFG)."""
+    if channel is None:
+        channel = ctx.channel
+
+    CONFIG['LFG_CHANNEL_ID'] = channel.id
+    save_config()
+
+    await ctx.send(f"✅ Канал **поиска пати (LFG)** установлен на: {channel.mention}", delete_after=10)
+
+@bot.command(name='set_arbitrage_role')
+@commands.has_permissions(manage_guild=True)
+async def set_arbitrage_role(ctx, role: discord.Role):
+    """Устанавливает роль для пинга арбитража."""
+    CONFIG['ARBITRAGE_ROLE_ID'] = role.id
+    save_config()
+    await ctx.send(f"✅ Роль для арбитража установлена: {role.mention}", delete_after=10)
+
+@bot.command(name='set_cascade_role')
+@commands.has_permissions(manage_guild=True)
+async def set_cascade_role(ctx, role: discord.Role):
+    """Устанавливает роль для пинга каскада."""
+    CONFIG['CASCAD_ROLE_ID'] = role.id
+    save_config()
+    await ctx.send(f"✅ Роль для каскада установлена: {role.mention}", delete_after=10)
+
+@bot.command(name='set_map_role')
+@commands.has_permissions(manage_guild=True)
+async def set_map_role(ctx, map_name: str, role: discord.Role):
+    """Устанавливает роль для конкретной карты."""
+    if 'MAP_ROLES' not in CONFIG:
+        CONFIG['MAP_ROLES'] = {}
+
+    CONFIG['MAP_ROLES'][map_name] = role.id
+    save_config()
+    await ctx.send(f"✅ Роль для карты **{map_name}** установлена: {role.mention}", delete_after=10)
+
+@bot.command(name='set_log_channel')
+@commands.has_permissions(manage_guild=True)
+async def set_log_channel(ctx, channel: discord.TextChannel = None):
+    """Устанавливает канал для логов и мониторинга."""
+    if channel is None:
+        channel = ctx.channel
+
+    CONFIG['LOG_CHANNEL_ID'] = channel.id
+    save_config()
+
+    # Отправляем начальное сообщение
+    embed = discord.Embed(
+        title="📊 Система мониторинга бота",
+        description="Этот канал предназначен для логов и мониторинга состояния бота.",
+        color=0x00FF00,
+        timestamp=datetime.now(timezone.utc)
+    )
+
+    embed.add_field(name="🟢 Статус", value="Бот активен", inline=True)
+    embed.add_field(name="🕒 Последнее обновление", value=f"<t:{int(time.time())}:R>", inline=True)
+    embed.add_field(name="📈 Производительность", value="Нормальная", inline=True)
+
+    # Формируем информацию о настройках
+    settings_info = []
+
+    arb_channel = CONFIG.get('ARBITRATION_CHANNEL_ID')
+    fissure_channel = CONFIG.get('FISSURE_CHANNEL_ID')
+    sp_channel = CONFIG.get('STEEL_PATH_CHANNEL_ID')
+    lfg_channel = CONFIG.get('LFG_CHANNEL_ID')
+
+    if arb_channel:
+        settings_info.append(f"**Канал арбитража:** <#{arb_channel}>")
+    else:
+        settings_info.append("**Канал арбитража:** ❌ Не настроен")
+
+    if fissure_channel:
+        settings_info.append(f"**Канал разрывов:** <#{fissure_channel}>")
+    else:
+        settings_info.append("**Канал разрывов:** ❌ Не настроен")
+
+    if sp_channel:
+        settings_info.append(f"**Канал SP:** <#{sp_channel}>")
+    else:
+        settings_info.append("**Канал SP:** ❌ Не настроен")
+
+    if lfg_channel:
+        settings_info.append(f"**Канал LFG:** <#{lfg_channel}>")
+    else:
+        settings_info.append("**Канал LFG:** ❌ Не настроен")
+
+    embed.add_field(
+        name="🔧 Настройки",
+        value="\n".join(settings_info),
+        inline=False
+    )
+
+    embed.set_footer(text="Система мониторинга Warframe LFG Bot")
+
+    await channel.send(embed=embed)
+    await ctx.send(f"✅ Канал **логов и мониторинга** установлен на: {channel.mention}", delete_after=10)
+
+@bot.command(name='status')
+@commands.has_permissions(manage_guild=True)
+async def status_command(ctx):
+    """Показывает текущее состояние бота."""
+    embed = discord.Embed(
+        title="📊 Состояние бота",
+        color=0x00FF00,
+        timestamp=datetime.now(timezone.utc)
+    )
+
+    # Информация о мониторинге
+    last_update_time = datetime.fromtimestamp(LAST_SCRAPE_TIME, timezone.utc) if LAST_SCRAPE_TIME > 0 else None
+    monitor_info = ""
+    if LAST_SCRAPE_TIME > 0:
+        monitor_info = f"**Последнее обновление:** <t:{int(LAST_SCRAPE_TIME)}:R>\n"
+    else:
+        monitor_info = "**Последнее обновление:** Никогда\n"
+
+    monitor_info += f"**Интервал мониторинга:** {MONITOR_INTERVAL_SECONDS} секунд\n"
+    monitor_info += f"**Интервал Discord:** {MISSION_UPDATE_INTERVAL_SECONDS} секунд\n"
+    monitor_info += f"**Проверок мониторинга:** {SCRAPE_STATS['monitor_checks']}\n"
+    monitor_info += f"**Обнаружено изменений:** {SCRAPE_STATS['monitor_changes']}"
+
+    embed.add_field(name="🔍 МОНИТОРИНГ", value=monitor_info, inline=False)
+
+    # Текущие данные
+    data_info = f"**Арбитраж:** {CURRENT_MISSION_STATE.get('ArbitrationSchedule', {}).get('Current', {}).get('Tier', 'N/A')}\n"
+    data_info += f"**Обычные разрывы:** {len(CURRENT_MISSION_STATE.get('Fissures', []))}\n"
+    data_info += f"**Разрывы SP:** {len(CURRENT_MISSION_STATE.get('SteelPathFissures', []))}\n"
+    data_info += f"**Режим работы:** {'Постоянный мониторинг' if MONITOR and MONITOR.is_running else 'Обычный режим'}\n"
+    data_info += f"**Render URL:** {RENDER_URL if RENDER_URL else 'Не настроен'}"
+
+    embed.add_field(name="📊 ДАННЫЕ", value=data_info, inline=False)
+
+    # Настройки каналов
+    channels_info = []
+    for key, name in [
+        ('ARBITRATION_CHANNEL_ID', 'Арбитраж'),
+        ('FISSURE_CHANNEL_ID', 'Разрывы'),
+        ('STEEL_PATH_CHANNEL_ID', 'Разрывы SP'),
+        ('LFG_CHANNEL_ID', 'LFG'),
+        ('LOG_CHANNEL_ID', 'Логи')
+    ]:
+        channel_id = CONFIG.get(key)
+        if channel_id:
+            channels_info.append(f"**{name}:** <#{channel_id}>")
+        else:
+            channels_info.append(f"**{name}:** ❌ Не настроен")
+
+    embed.add_field(name="⚙️ НАСТРОЙКИ", value="\n".join(channels_info), inline=False)
+
+    # Производительность
+    embed.add_field(name="📈 ПРОИЗВОДИТЕЛЬНОСТЬ", value=f"**Пинг:** `{round(bot.latency * 1000)}ms`\n**Серверов:** `{len(bot.guilds)}`\n**Пользователей:** `{len(bot.users)}`", inline=False)
+
+    embed.set_footer(text=f"Запущен: {datetime.fromtimestamp(bot.user.created_at.timestamp()).strftime('%Y-%m-%d %H:%M:%S')}")
+
+    await ctx.send(embed=embed)
+
+@bot.command(name='force_update')
+@commands.has_permissions(manage_guild=True)
+async def force_update(ctx):
+    """Принудительно обновляет все каналы."""
+    await ctx.send("🔄 Принудительное обновление всех каналов...", delete_after=5)
+
+    await update_arbitration_channel(bot)
+    await update_normal_fissure_channel(bot)
+    await update_steel_path_channel(bot)
+
+    await ctx.send("✅ Все каналы обновлены!", delete_after=5)
+
+@bot.command(name='ping_self')
+@commands.has_permissions(manage_guild=True)
+async def ping_self_command(ctx):
+    """Пингнуть самого себя для предотвращения сна на Render.com."""
+    if not RENDER_URL:
+        await ctx.send("❌ RENDER_URL не настроен в переменных окружения!", delete_after=10)
+        return
+    
+    await ctx.send("🔄 Пингую самого себя...", delete_after=5)
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f'{RENDER_URL}/ping-self', timeout=10) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    last_ping = health_server.last_ping_time
+                    if last_ping:
+                        last_ping_str = last_ping.strftime('%H:%M:%S')
+                        await ctx.send(f"✅ Успешный пинг! Ответ: {data.get('message', 'OK')}\nПоследний пинг: {last_ping_str}", delete_after=10)
+                    else:
+                        await ctx.send(f"✅ Успешный пинг! Ответ: {data.get('message', 'OK')}", delete_after=10)
+                else:
+                    await ctx.send(f"❌ Ошибка пинга: Status {response.status}", delete_after=10)
+    except Exception as e:
+        await ctx.send(f"❌ Ошибка при пинге: {str(e)}", delete_after=10)
+
+# =================================================================
+# 10. МОНИТОРИНГ И ОБНОВЛЕНИЕ КАНАЛОВ
+# =================================================================
+
 @bot.command(name='monitor_status')
 @commands.has_permissions(manage_guild=True)
 async def monitor_status_command(ctx):
@@ -2166,10 +2476,6 @@ async def monitor_status_command(ctx):
     
     embed.set_footer(text="Warframe LFG Bot | Система мониторинга")
     await ctx.send(embed=embed, delete_after=30)
-
-# =================================================================
-# 9. КЭШ И ОПТИМИЗИРОВАННАЯ ЛОГИКА ОБНОВЛЕНИЯ КАНАЛОВ
-# =================================================================
 
 class ChannelCache:
     """Кэш для хранения состояния каналов."""
@@ -2557,18 +2863,8 @@ async def update_steel_path_channel(bot: commands.Bot):
     await send_or_edit_message('LAST_STEEL_MESSAGE_ID', sp_channel, embed, view=lfg_view)
 
 # =================================================================
-# 10. ОСНОВНОЙ КОД БОТА И КОМАНДЫ
+# 11. ЗАДАЧИ И СОБЫТИЯ БОТА
 # =================================================================
-
-intents = discord.Intents.default()
-intents.emojis_and_stickers = True
-intents.message_content = True
-intents.guilds = True
-
-bot = commands.Bot(command_prefix='!', intents=intents)
-
-# Удаляем стандартную команду help, чтобы использовать свою
-bot.remove_command('help')
 
 @tasks.loop(seconds=MISSION_UPDATE_INTERVAL_SECONDS)
 async def mission_update_task():
@@ -2650,300 +2946,8 @@ async def on_ready():
             await log_channel.send(embed=embed)
 
 # =================================================================
-# 11. КОМАНДЫ БОТА
+# 12. ЗАПУСК БОТА
 # =================================================================
-
-@bot.command(name='command', aliases=['commands', 'help'])
-async def command_list(ctx):
-    """Показывает список всех доступных команд бота."""
-    embed = discord.Embed(
-        title="📚 Список команд бота",
-        description="Все доступные команды для управления ботом",
-        color=0x00CCFF
-    )
-
-    # Настройка каналов
-    embed.add_field(
-        name="⚙️ Настройка каналов (требует прав управлять сервером)",
-        value=(
-            "`!set_arbitration_channel` - Установить текущий канал для Арбитражей\n"
-            "`!set_normal_ruptures` - Установить канал для обычных Разрывов\n"
-            "`!set_steel_path_ruptures` - Установить канал для Разрывов Стального Пути\n"
-            "`!set_lfg_channel [канал]` - Установить канал для поиска пати (LFG)\n"
-            "`!set_log_channel [канал]` - Установить канал для логов и мониторинга"
-        ),
-        inline=False
-    )
-
-    # Настройка ролей
-    embed.add_field(
-        name="👥 Настройка ролей (требует прав управлять сервером)",
-        value=(
-            "`!set_arbitrage_role @роль` - Установить роль для пинга арбитража\n"
-            "`!set_cascade_role @роль` - Установить роль для пинга каскада\n"
-            "`!set_map_role название_карты @роль` - Установить роль для конкретной карты"
-        ),
-        inline=False
-    )
-
-    # Информационные команды
-    embed.add_field(
-        name="📊 Информационные команды",
-        value=(
-            "`!status` - Показать состояние бота и настройки\n"
-            "`!command` или `!commands` или `!help` - Показать этот список команд\n"
-            "`!force_update` - Принудительно обновить все каналы\n"
-            "`!ping_self` - Пингнуть себя для предотвращения сна (Render.com)\n"
-            "`!monitor_status` - Показать статус постоянного мониторинга"
-        ),
-        inline=False
-    )
-
-    # Общие команды
-    embed.add_field(
-        name="🎮 Команды для всех пользователей",
-        value=(
-            "• Нажмите кнопки под сообщениями в каналах:\n"
-            "  - **Арбитраж**: 'Создать пати на Арбитраж' или 'На текущий арбитраж'\n"
-            "  - **Разрывы**: Выберите миссию из выпадающего списка\n"
-            "• В тикете LFG можно:\n"
-            "  - Занять свободные слоты\n"
-            "  - Добавить комментарий\n"
-            "  - Покинуть слот\n"
-            "  - Закрыть тикет (только создатель)"
-        ),
-        inline=False
-    )
-
-    embed.set_footer(text=f"Бот автоматически обновляет данные каждые {MONITOR_INTERVAL_SECONDS} секунд")
-
-    await ctx.send(embed=embed)
-
-@bot.command(name='set_arbitration_channel')
-@commands.has_permissions(manage_guild=True)
-async def set_arbitration_channel(ctx):
-    """Устанавливает текущий канал как канал Расписания Арбитражей."""
-    CONFIG['ARBITRATION_CHANNEL_ID'] = ctx.channel.id
-    save_config()
-
-    await update_arbitration_channel(bot)
-    await ctx.send(f"✅ Канал **Расписания Арбитражей** установлен на: {ctx.channel.mention} и запущен.", delete_after=10)
-
-@bot.command(name='set_normal_ruptures')
-@commands.has_permissions(manage_guild=True)
-async def set_normal_fissure_channel(ctx):
-    """Устанавливает текущий канал как канал Обычных Разрывов."""
-    CONFIG['FISSURE_CHANNEL_ID'] = ctx.channel.id
-    save_config()
-
-    await update_normal_fissure_channel(bot)
-    await ctx.send(f"✅ Канал **Обычных Разрывов** установлен на: {ctx.channel.mention} и запущен.", delete_after=10)
-
-@bot.command(name='set_steel_path_ruptures')
-@commands.has_permissions(manage_guild=True)
-async def set_steel_path_channel(ctx):
-    """Устанавливает текущий канал как канал Разрывов Пути Стали."""
-    CONFIG['STEEL_PATH_CHANNEL_ID'] = ctx.channel.id
-    save_config()
-
-    await update_steel_path_channel(bot)
-    await ctx.send(f"✅ Канал **Разрывов Пути Стали** установлен на: {ctx.channel.mention} и запущен.", delete_after=10)
-
-@bot.command(name='set_lfg_channel')
-@commands.has_permissions(manage_guild=True)
-async def set_lfg_channel(ctx, channel: discord.TextChannel = None):
-    """Устанавливает канал для поиска пати (LFG)."""
-    if channel is None:
-        channel = ctx.channel
-
-    CONFIG['LFG_CHANNEL_ID'] = channel.id
-    save_config()
-
-    await ctx.send(f"✅ Канал **поиска пати (LFG)** установлен на: {channel.mention}", delete_after=10)
-
-@bot.command(name='set_arbitrage_role')
-@commands.has_permissions(manage_guild=True)
-async def set_arbitrage_role(ctx, role: discord.Role):
-    """Устанавливает роль для пинга арбитража."""
-    CONFIG['ARBITRAGE_ROLE_ID'] = role.id
-    save_config()
-    await ctx.send(f"✅ Роль для арбитража установлена: {role.mention}", delete_after=10)
-
-@bot.command(name='set_cascade_role')
-@commands.has_permissions(manage_guild=True)
-async def set_cascade_role(ctx, role: discord.Role):
-    """Устанавливает роль для пинга каскада."""
-    CONFIG['CASCAD_ROLE_ID'] = role.id
-    save_config()
-    await ctx.send(f"✅ Роль для каскада установлена: {role.mention}", delete_after=10)
-
-@bot.command(name='set_map_role')
-@commands.has_permissions(manage_guild=True)
-async def set_map_role(ctx, map_name: str, role: discord.Role):
-    """Устанавливает роль для конкретной карты."""
-    if 'MAP_ROLES' not in CONFIG:
-        CONFIG['MAP_ROLES'] = {}
-
-    CONFIG['MAP_ROLES'][map_name] = role.id
-    save_config()
-    await ctx.send(f"✅ Роль для карты **{map_name}** установлена: {role.mention}", delete_after=10)
-
-@bot.command(name='set_log_channel')
-@commands.has_permissions(manage_guild=True)
-async def set_log_channel(ctx, channel: discord.TextChannel = None):
-    """Устанавливает канал для логов и мониторинга."""
-    if channel is None:
-        channel = ctx.channel
-
-    CONFIG['LOG_CHANNEL_ID'] = channel.id
-    save_config()
-
-    # Отправляем начальное сообщение
-    embed = discord.Embed(
-        title="📊 Система мониторинга бота",
-        description="Этот канал предназначен для логов и мониторинга состояния бота.",
-        color=0x00FF00,
-        timestamp=datetime.now(timezone.utc)
-    )
-
-    embed.add_field(name="🟢 Статус", value="Бот активен", inline=True)
-    embed.add_field(name="🕒 Последнее обновление", value=f"<t:{int(time.time())}:R>", inline=True)
-    embed.add_field(name="📈 Производительность", value="Нормальная", inline=True)
-
-    # Формируем информацию о настройках
-    settings_info = []
-
-    arb_channel = CONFIG.get('ARBITRATION_CHANNEL_ID')
-    fissure_channel = CONFIG.get('FISSURE_CHANNEL_ID')
-    sp_channel = CONFIG.get('STEEL_PATH_CHANNEL_ID')
-    lfg_channel = CONFIG.get('LFG_CHANNEL_ID')
-
-    if arb_channel:
-        settings_info.append(f"**Канал арбитража:** <#{arb_channel}>")
-    else:
-        settings_info.append("**Канал арбитража:** ❌ Не настроен")
-
-    if fissure_channel:
-        settings_info.append(f"**Канал разрывов:** <#{fissure_channel}>")
-    else:
-        settings_info.append("**Канал разрывов:** ❌ Не настроен")
-
-    if sp_channel:
-        settings_info.append(f"**Канал SP:** <#{sp_channel}>")
-    else:
-        settings_info.append("**Канал SP:** ❌ Не настроен")
-
-    if lfg_channel:
-        settings_info.append(f"**Канал LFG:** <#{lfg_channel}>")
-    else:
-        settings_info.append("**Канал LFG:** ❌ Не настроен")
-
-    embed.add_field(
-        name="🔧 Настройки",
-        value="\n".join(settings_info),
-        inline=False
-    )
-
-    embed.set_footer(text="Система мониторинга Warframe LFG Bot")
-
-    await channel.send(embed=embed)
-    await ctx.send(f"✅ Канал **логов и мониторинга** установлен на: {channel.mention}", delete_after=10)
-
-@bot.command(name='status')
-@commands.has_permissions(manage_guild=True)
-async def status_command(ctx):
-    """Показывает текущее состояние бота."""
-    embed = discord.Embed(
-        title="📊 Состояние бота",
-        color=0x00FF00,
-        timestamp=datetime.now(timezone.utc)
-    )
-
-    # Информация о мониторинге
-    last_update_time = datetime.fromtimestamp(LAST_SCRAPE_TIME, timezone.utc) if LAST_SCRAPE_TIME > 0 else None
-    monitor_info = ""
-    if LAST_SCRAPE_TIME > 0:
-        monitor_info = f"**Последнее обновление:** <t:{int(LAST_SCRAPE_TIME)}:R>\n"
-    else:
-        monitor_info = "**Последнее обновление:** Никогда\n"
-
-    monitor_info += f"**Интервал мониторинга:** {MONITOR_INTERVAL_SECONDS} секунд\n"
-    monitor_info += f"**Интервал Discord:** {MISSION_UPDATE_INTERVAL_SECONDS} секунд\n"
-    monitor_info += f"**Проверок мониторинга:** {SCRAPE_STATS['monitor_checks']}\n"
-    monitor_info += f"**Обнаружено изменений:** {SCRAPE_STATS['monitor_changes']}"
-
-    embed.add_field(name="🔍 МОНИТОРИНГ", value=monitor_info, inline=False)
-
-    # Текущие данные
-    data_info = f"**Арбитраж:** {CURRENT_MISSION_STATE.get('ArbitrationSchedule', {}).get('Current', {}).get('Tier', 'N/A')}\n"
-    data_info += f"**Обычные разрывы:** {len(CURRENT_MISSION_STATE.get('Fissures', []))}\n"
-    data_info += f"**Разрывы SP:** {len(CURRENT_MISSION_STATE.get('SteelPathFissures', []))}\n"
-    data_info += f"**Режим работы:** {'Постоянный мониторинг' if MONITOR and MONITOR.is_running else 'Обычный режим'}\n"
-    data_info += f"**Render URL:** {RENDER_URL if RENDER_URL else 'Не настроен'}"
-
-    embed.add_field(name="📊 ДАННЫЕ", value=data_info, inline=False)
-
-    # Настройки каналов
-    channels_info = []
-    for key, name in [
-        ('ARBITRATION_CHANNEL_ID', 'Арбитраж'),
-        ('FISSURE_CHANNEL_ID', 'Разрывы'),
-        ('STEEL_PATH_CHANNEL_ID', 'Разрывы SP'),
-        ('LFG_CHANNEL_ID', 'LFG'),
-        ('LOG_CHANNEL_ID', 'Логи')
-    ]:
-        channel_id = CONFIG.get(key)
-        if channel_id:
-            channels_info.append(f"**{name}:** <#{channel_id}>")
-        else:
-            channels_info.append(f"**{name}:** ❌ Не настроен")
-
-    embed.add_field(name="⚙️ НАСТРОЙКИ", value="\n".join(channels_info), inline=False)
-
-    # Производительность
-    embed.add_field(name="📈 ПРОИЗВОДИТЕЛЬНОСТЬ", value=f"**Пинг:** `{round(bot.latency * 1000)}ms`\n**Серверов:** `{len(bot.guilds)}`\n**Пользователей:** `{len(bot.users)}`", inline=False)
-
-    embed.set_footer(text=f"Запущен: {datetime.fromtimestamp(bot.user.created_at.timestamp()).strftime('%Y-%m-%d %H:%M:%S')}")
-
-    await ctx.send(embed=embed)
-
-@bot.command(name='force_update')
-@commands.has_permissions(manage_guild=True)
-async def force_update(ctx):
-    """Принудительно обновляет все каналы."""
-    await ctx.send("🔄 Принудительное обновление всех каналов...", delete_after=5)
-
-    await update_arbitration_channel(bot)
-    await update_normal_fissure_channel(bot)
-    await update_steel_path_channel(bot)
-
-    await ctx.send("✅ Все каналы обновлены!", delete_after=5)
-
-@bot.command(name='ping_self')
-@commands.has_permissions(manage_guild=True)
-async def ping_self_command(ctx):
-    """Пингнуть самого себя для предотвращения сна на Render.com."""
-    if not RENDER_URL:
-        await ctx.send("❌ RENDER_URL не настроен в переменных окружения!", delete_after=10)
-        return
-    
-    await ctx.send("🔄 Пингую самого себя...", delete_after=5)
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f'{RENDER_URL}/ping-self', timeout=10) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    last_ping = health_server.last_ping_time
-                    if last_ping:
-                        last_ping_str = last_ping.strftime('%H:%M:%S')
-                        await ctx.send(f"✅ Успешный пинг! Ответ: {data.get('message', 'OK')}\nПоследний пинг: {last_ping_str}", delete_after=10)
-                    else:
-                        await ctx.send(f"✅ Успешный пинг! Ответ: {data.get('message', 'OK')}", delete_after=10)
-                else:
-                    await ctx.send(f"❌ Ошибка пинга: Status {response.status}", delete_after=10)
-    except Exception as e:
-        await ctx.send(f"❌ Ошибка при пинге: {str(e)}", delete_after=10)
 
 if __name__ == '__main__':
     print(f"[{time.strftime('%H:%M:%S')}] Запуск бота...")
