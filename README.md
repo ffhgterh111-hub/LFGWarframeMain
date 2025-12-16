@@ -21,6 +21,7 @@ Discord бот для мониторинга миссий Warframe и поиск
 2. Нажмите "New +" → "Web Service"
 3. Подключите ваш GitHub репозиторий
 4. Настройки автоматически загрузятся из `render.yaml`
+5. Настройка Build command : pip install -r requirements.txt && python -m playwright install chromium && python -m playwright install-deps --dry-run
 <img width="1394" height="226" alt="image" src="https://github.com/user-attachments/assets/18b31792-e9d8-4033-a0a0-d077472660e4" />
 
 
@@ -55,3 +56,4 @@ Discord бот для мониторинга миссий Warframe и поиск
    pip install -r requirements.txt
 
    playwright install chromium
+
