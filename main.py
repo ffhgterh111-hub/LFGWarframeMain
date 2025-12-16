@@ -383,7 +383,7 @@ def extract_faction_from_mission_description(description: str) -> Optional[str]:
             return 'Корпус'
         elif 'орокин' in faction_candidate_lower or 'corrupted' in faction_candidate_lower:
             return 'Орокин'
-        elif 'шепот' в faction_candidate_lower or 'murmur' в faction_candidate_lower:
+        elif 'шепот' in faction_candidate_lower or 'murmur' in faction_candidate_lower:
             return 'Шёпот'
 
     # Ищем просто в тексте без скобок
@@ -2963,3 +2963,4 @@ if __name__ == '__main__':
     except Exception as e:
         print(f"Произошла ошибка при запуске бота: {e}")
 #[file content end]
+
