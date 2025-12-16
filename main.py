@@ -58,12 +58,14 @@ TIER_CACHE = TTLCache(maxsize=5, ttl=1800)
 CURRENT_MISSION_STATE = {
     "ArbitrationSchedule": {},
     "Fissures": [],
-    "SteelPathFissures": []
+    "SteelPathFissures": [],
+    "RailjackFissures": []  # Добавляем отдельный список для Railjack
 }
 PREVIOUS_MISSION_STATE = {
     "ArbitrationSchedule": {},
     "Fissures": [],
-    "SteelPathFissures": []
+    "SteelPathFissures": [],
+    "RailjackFissures": []
 }
 LAST_SCRAPE_TIME = 0
 CONFIG: Dict[str, Any] = {}
@@ -88,7 +90,8 @@ CHANGES_LOCK = threading.Lock()
 LAST_CHANGES = {
     "ArbitrationSchedule": False,
     "Fissures": False,
-    "SteelPathFissures": False
+    "SteelPathFissures": False,
+    "RailjackFissures": False  # Добавляем отслеживание изменений для Railjack
 }
 
 # --- КОНСТАНТЫ ЦВЕТОВ ТИРОВ (АРБИТРАЖ) ---
@@ -107,7 +110,8 @@ TICKET_COLORS = {
     "арбитраж": 0xFFA500,
     "разрыв": 0x00CCFF,
     "стальной путь": 0x00CCFF,
-    "каскад": 0x00FF00
+    "каскад": 0x00FF00,
+    "рейлджек": 0x8A2BE2  # Фиолетовый для Railjack
 }
 
 # --- СТИЛИЗАЦИЯ И ЭМОДЗИ ---
@@ -121,7 +125,7 @@ EMOJI_NAMES = {
     "Lith": "Lith", "Meso": "Meso", "Neo": "Neo", "Axi": "Axi",
     "Requiem": "Requiem", "Omnia": "Omnia", "SteelPath": "SP",
     # Специальные
-    "ВИТУС": "Vitus", "КУВА": "Kuva"
+    "ВИТУС": "Vitus", "КУВА": "Kuva", "РЕЙЛДЖЕК": "Railjack"
 }
 RESOLVED_EMOJIS: Dict[str, str] = {}
 FACTION_EMOJIS_FINAL: Dict[str, str] = {}
@@ -133,6 +137,7 @@ FALLBACK_EMOJI = "❓"
 KUVA_EMOJI_KEY = "КУВА"
 VITUS_EMOJI_KEY = "ВИТУС"
 SP_EMOJI_KEY = "SteelPath"
+RAILJACK_EMOJI_KEY = "РЕЙЛДЖЕК"
 
 # --- КОНСТАНТЫ ФРАКЦИОННЫХ ИЗОБРАЖЕНИЙ ---
 FACTION_IMAGE_URLS = {
@@ -194,8 +199,9 @@ MISSION_TYPE_TRANSLATIONS = {
     "Crossfire": "Перестрелка", "Alchemy": "Алхимия", "Void Cascade": "Каскад Бездны",
     "Void Flood": "Потоп Бездны", "MD": "Мобильная оборона", "Def": "Оборона",
     "Excavation": "Раскопки", "Conjunction Survival": "Сопряжённое выживание",
-    "Defection": "Перебежчики", "Skirmish": "Схватка",
-    "Unknown Mission": "Неизвестный тип"
+    "Defection": "Перебежчики", "Skirmish": "Схватка", "Volatile": "Нестабильная",
+    "Orphix": "Орфикс", "Unknown Mission": "Неизвестный тип", "Void Storm": "Шторм Бездны",
+    "Void Armageddon": "Армагеддон Бездны", "Extermination": "Зачистка"
 }
 
 # =================================================================
@@ -243,8 +249,10 @@ def load_config():
         'LAST_MENTIONED_NODE': None,
         "FISSURE_CHANNEL_ID": None,
         "STEEL_PATH_CHANNEL_ID": None,
+        "RAILJACK_CHANNEL_ID": None,  # Добавляем канал для Railjack
         'LAST_NORMAL_MESSAGE_ID': None,
         'LAST_STEEL_MESSAGE_ID': None,
+        'LAST_RAILJACK_MESSAGE_ID': None,  # Добавляем ID сообщения для Railjack
         "LFG_CHANNEL_ID": None,
         "ARBITRAGE_ROLE_ID": None,
         "CASCAD_ROLE_ID": None,
@@ -446,6 +454,7 @@ async def update_log_message(bot: commands.Bot):
     arb_tier = current_arb.get("Tier", "N/A")
     normal_fissures = len(CURRENT_MISSION_STATE.get("Fissures", []))
     sp_fissures = len(CURRENT_MISSION_STATE.get("SteelPathFissures", []))
+    railjack_fissures = len(CURRENT_MISSION_STATE.get("RailjackFissures", []))
 
     # Создаем embed
     embed = discord.Embed(
@@ -494,6 +503,7 @@ async def update_log_message(bot: commands.Bot):
             f"**Арбитраж:** {arb_tier}\n"
             f"**Разрывы:** {normal_fissures}\n"
             f"**Разрывы SP:** {sp_fissures}\n"
+            f"**Штормы RJ:** {railjack_fissures}\n"
             f"**Последний скрап:** <t:{int(LAST_SCRAPE_TIME)}:R>\n"
             f"**Интервал:** {SCRAPE_INTERVAL_SECONDS}с\n"
             f"**Последнее изменение:** <t:{int(time.time())}:R>"
@@ -507,6 +517,7 @@ async def update_log_message(bot: commands.Bot):
         ('ARBITRATION_CHANNEL_ID', 'Арбитраж'),
         ('FISSURE_CHANNEL_ID', 'Разрывы'),
         ('STEEL_PATH_CHANNEL_ID', 'Разрывы SP'),
+        ('RAILJACK_CHANNEL_ID', 'Штормы RJ'),
         ('LFG_CHANNEL_ID', 'LFG'),
         ('LOG_CHANNEL_ID', 'Логи')
     ]:
@@ -565,6 +576,8 @@ def resolve_custom_emojis(bot: commands.Bot):
                 RESOLVED_EMOJIS[emoji_name] = "⭐"  # Звезда вместо витуса
             elif key_name == "КУВА":
                 RESOLVED_EMOJIS[emoji_name] = "⚡️"  # Молния вместо кувы
+            elif key_name == "РЕЙЛДЖЕК":
+                RESOLVED_EMOJIS[emoji_name] = "🚀"  # Ракета для Railjack
             elif key_name in ["Гринир", "Корпус", "Зараженные", "Орокин", "Шёпот"]:
                 RESOLVED_EMOJIS[emoji_name] = "⚔️"  # Скрещенные мечи для фракций
             elif key_name in ["S", "A", "B", "C", "D", "F"]:
@@ -667,7 +680,8 @@ def set_current_state(data: Dict[str, Any], scrape_time: float):
         changes = {
             "ArbitrationSchedule": False,
             "Fissures": False,
-            "SteelPathFissures": False
+            "SteelPathFissures": False,
+            "RailjackFissures": False  # Добавляем Railjack
         }
 
         # Получаем данные о пустых состояниях
@@ -681,6 +695,9 @@ def set_current_state(data: Dict[str, Any], scrape_time: float):
 
         old_sp_fissures = PREVIOUS_MISSION_STATE.get("SteelPathFissures", [])
         new_sp_fissures = data.get("SteelPathFissures", [])
+
+        old_rj_fissures = PREVIOUS_MISSION_STATE.get("RailjackFissures", [])
+        new_rj_fissures = data.get("RailjackFissures", [])
 
         # Проверяем изменения только если в новых данных что-то есть
         # Для арбитража
@@ -701,6 +718,12 @@ def set_current_state(data: Dict[str, Any], scrape_time: float):
                 changes["SteelPathFissures"] = True
         # Если новых разрывов нет, НЕ обновляем
 
+        # Для Railjack разрывов
+        if len(new_rj_fissures) > 0:
+            if not compare_fissures_fast(old_rj_fissures, new_rj_fissures):
+                changes["RailjackFissures"] = True
+        # Если новых разрывов нет, НЕ обновляем
+
         # Обновляем предыдущее состояние ТОЛЬКО если новые данные валидны
         # (не N/A и не пустые)
         if new_arb_node != 'N/A' and new_arb_node != '':
@@ -711,6 +734,9 @@ def set_current_state(data: Dict[str, Any], scrape_time: float):
 
         if len(new_sp_fissures) > 0:
             PREVIOUS_MISSION_STATE["SteelPathFissures"] = copy.deepcopy(new_sp_fissures)
+
+        if len(new_rj_fissures) > 0:
+            PREVIOUS_MISSION_STATE["RailjackFissures"] = copy.deepcopy(new_rj_fissures)
 
         # Фиксируем изменения
         for key in changes:
@@ -1011,6 +1037,13 @@ class LFGTicketView(discord.ui.View):
             # Для каскада используем зеленый цвет и особый заголовок
             color = TICKET_COLORS.get(mission_type, 0x00FF00)
             title = "🌀 Поиск пати: Каскад Бездны"
+        elif mission_type == "рейлджек":
+            # Для Railjack используем фиолетовый цвет
+            railjack_emoji = RESOLVED_EMOJIS.get(EMOJI_NAMES.get(RAILJACK_EMOJI_KEY), "🚀")
+            color = TICKET_COLORS.get(mission_type, 0x8A2BE2)
+            relic_display = self.mission_info.get("relic_display", "")
+            relic_type = self.mission_info.get("relic", "")
+            title = f"{railjack_emoji} Поиск пати: {relic_display} {relic_type} Шторм Бездны"
         else:
             color = TICKET_COLORS.get(mission_type, 0x00CCFF)
             relic_display = self.mission_info.get("relic_display", "")
@@ -1034,7 +1067,7 @@ class LFGTicketView(discord.ui.View):
         ]
 
         # Добавляем уровень для разрывов
-        if mission_type in ["разрыв", "стальной путь", "каскад"]:
+        if mission_type in ["разрыв", "стальной путь", "каскад", "рейлджек"]:
             level = self.mission_info.get("level", "")
             if level:
                 description_lines.append(f"**Уровень:** {level}")
@@ -1073,10 +1106,11 @@ class LFGTicketView(discord.ui.View):
 class FissureSelectView(discord.ui.View):
     """View для выбора разрыва для создания LFG тикета."""
 
-    def __init__(self, fissures: List[Dict], is_steel_path: bool = False):
+    def __init__(self, fissures: List[Dict], is_steel_path: bool = False, is_railjack: bool = False):
         super().__init__(timeout=600)
         self.fissures = fissures
         self.is_steel_path = is_steel_path
+        self.is_railjack = is_railjack
         self.selected_fissure = None
         self.comment_text = None
 
@@ -1122,7 +1156,9 @@ class FissureSelectView(discord.ui.View):
         await interaction.response.defer(thinking=True, ephemeral=True)
 
         data = CURRENT_MISSION_STATE
-        if self.is_steel_path:
+        if self.is_railjack:
+            self.fissures = data.get("RailjackFissures", [])
+        elif self.is_steel_path:
             self.fissures = data.get("SteelPathFissures", [])
         else:
             self.fissures = data.get("Fissures", [])
@@ -1230,9 +1266,19 @@ class CreateTicketButton(discord.ui.Button):
         if fissure['Type'] in ["Void Cascade", "Каскад Бездны", "Void Flood", "Потоп Бездны"]:
             is_cascade = True
 
+        # Определяем тип миссии
+        if self.parent_view.is_railjack:
+            mission_type = "рейлджек"
+        elif is_cascade:
+            mission_type = "каскад"
+        elif self.parent_view.is_steel_path:
+            mission_type = "стальной путь"
+        else:
+            mission_type = "разрыв"
+
         mission_info = {
-            "type": "каскад" if is_cascade else ("стальной путь" if self.parent_view.is_steel_path else "разрыв"),
-            "name": f"{relic_display} {relic_type} {'Каскад' if is_cascade else 'Разрыв'}",
+            "type": mission_type,
+            "name": f"{relic_display} {relic_type} {'Каскад' if is_cascade else ('Шторм' if mission_type == 'рейлджек' else 'Разрыв')}",
             "full_name": mission_full_name,
             "faction": faction_name,
             "relic": relic_type,
@@ -1267,9 +1313,14 @@ class CreateTicketButton(discord.ui.Button):
                     role_mention = f"{cascade_role.mention} "
 
         # Формируем контент сообщения с упоминанием роли
-        content_message = f"{role_mention}🌀 **Пати на Каскад Бездны ищет игроков!** Создатель: {interaction.user.mention}"
-
+        content_message = ""
         if is_cascade:
+            content_message = f"{role_mention}🌀 **Пати на Каскад Бездны ищет игроков!** Создатель: {interaction.user.mention}"
+        elif mission_type == "рейлджек":
+            railjack_emoji = RESOLVED_EMOJIS.get(EMOJI_NAMES.get(RAILJACK_EMOJI_KEY), "🚀")
+            content_message = f"{railjack_emoji} **Пати на Шторм Бездны (Railjack) ищет игроков!** Создатель: {interaction.user.mention}"
+
+        if content_message:
             sent_message = await lfg_channel.send(content=content_message, embed=embed, view=ticket_view)
         else:
             sent_message = await lfg_channel.send(embed=embed, view=ticket_view)
@@ -1277,7 +1328,8 @@ class CreateTicketButton(discord.ui.Button):
         ticket_view.message_id = sent_message.id
 
         await interaction.response.edit_message(
-            content=f"✅ Тикет создан в канале {lfg_channel.mention}! (Старый тикет закрыт)" + (f"\nРоль @Каскад упомянута." if is_cascade else ""),
+            content=f"✅ Тикет создан в канале {lfg_channel.mention}! (Старый тикет закрыт)" + 
+                   (f"\nРоль @Каскад упомянута." if is_cascade else ""),
             view=self.parent_view
         )
 
@@ -1823,7 +1875,7 @@ def parse_arbitration_schedule(soup: BeautifulSoup, current_scrape_time: float) 
 
     return schedule
 
-def parse_fissure_table(table: Tag, current_scrape_time: float, is_steel_path_table: bool = False) -> List[Dict[str, Any]]:
+def parse_fissure_table(table: Tag, current_scrape_time: float, is_steel_path_table: bool = False, is_railjack_table: bool = False) -> List[Dict[str, Any]]:
     """Парсит строки из одной таблицы разрывов."""
     fissures_list: List[Dict[str, Any]] = []
     rows = table.find_all('tr')
@@ -1842,6 +1894,10 @@ def parse_fissure_table(table: Tag, current_scrape_time: float, is_steel_path_ta
         mission_type_raw = mission_type_tag.text.strip() if mission_type_tag else "Unknown Mission"
         if mission_type_raw.startswith("М."):
             mission_type_raw = mission_type_raw[2:].strip()
+
+        # Для Railjack миссий добавляем префикс
+        if is_railjack_table and "Void Storm" not in mission_type_raw:
+            mission_type_raw = f"Void Storm: {mission_type_raw}"
 
         mission_type = MISSION_TYPE_TRANSLATIONS.get(mission_type_raw, mission_type_raw)
 
@@ -1897,12 +1953,18 @@ def parse_fissure_table(table: Tag, current_scrape_time: float, is_steel_path_ta
                 "ExpiryTime": expiry_time
             }
 
+            # Для Omnia разрывов исправляем фракцию
             if fissure_data["Relic"] == "Omnia":
                 fissure_data["Race"] = "Гринир"
 
+            # Для Steel Path убираем маркеры
             if is_steel_path_table or "Steel Path" in location or "Steel Path" in mission_type_raw:
                 fissure_data['Type'] = fissure_data['Type'].replace("(Steel Path)", "").strip()
                 fissure_data['Location'] = fissure_data['Location'].replace(" (Steel Path)", "").strip()
+
+            # Для Railjack добавляем маркер
+            if is_railjack_table:
+                fissure_data['Type'] = f"Шторм Бездны: {fissure_data['Type']}"
 
             # Добавляем только если есть реликвия
             if fissure_data["Relic"] != "N/A":
@@ -1916,11 +1978,11 @@ async def scrape_fissures_fast():
     
     if not BROWSER_INITIALIZED or not PLAYWRIGHT_CONTEXT:
         if not await init_persistent_browser():
-            return {"Fissures": [], "SteelPathFissures": []}
+            return {"Fissures": [], "SteelPathFissures": [], "RailjackFissures": []}
     
     async with BROWSER_LOCK:
         current_scrape_time = time.time()
-        results = {"Fissures": [], "SteelPathFissures": []}
+        results = {"Fissures": [], "SteelPathFissures": [], "RailjackFissures": []}
         
         try:
             # Создаем новую страницу в существующем контексте
@@ -1964,38 +2026,94 @@ async def scrape_fissures_fast():
                 # Парсим таблицы
                 tables = soup.find_all('table')
                 
-                # Ищем таблицу обычных разрывов
+                print(f"[{time.strftime('%H:%M:%S')}]   -> Найдено таблиц: {len(tables)}")
+                
+                # Ищем все типы таблиц
                 normal_table = None
                 sp_table = None
+                railjack_table = None
                 
                 for table in tables:
                     table_html = str(table).lower()
+                    table_text = table.get_text().lower()
                     
-                    # Таблица обычных разрывов
-                    if ('lith' in table_html or 'meso' in table_html or 
-                        'neo' in table_html or 'axi' in table_html):
-                        if 'steel path' not in table_html and 'sp-fissures' not in table_html:
+                    # Отладочный вывод
+                    table_id = table.get('id', 'нет id')
+                    table_classes = table.get('class', [])
+                    print(f"[{time.strftime('%H:%M:%S')}]   -> Таблица: id='{table_id}', class='{table_classes}', текст: {table_text[:100]}...")
+                    
+                    # Таблица обычных разрывов (Void Fissures)
+                    if ('void fissures' in table_text or 
+                        'fissures-table' in table_id or
+                        ('lith' in table_text and 'meso' in table_text and 'neo' in table_text and 'axi' in table_text)):
+                        if 'steel path' not in table_text and 'sp-fissures' not in table_id and 'railjack' not in table_text:
                             normal_table = table
+                            print(f"[{time.strftime('%H:%M:%S')}]   -> ✅ Найдена таблица обычных разрывов")
                     
                     # Таблица Steel Path
-                    if 'sp-fissures' in table_html or 'steel path' in table_html:
+                    if ('steel path' in table_text or 
+                        'sp-fissures' in table_id or
+                        'sp-fissures-table' in table_id):
                         sp_table = table
+                        print(f"[{time.strftime('%H:%M:%S')}]   -> ✅ Найдена таблица Steel Path")
+                    
+                    # Таблица Railjack (Void Storms)
+                    if ('void storms' in table_text or 
+                        'railjack' in table_text or
+                        'storm' in table_text):
+                        railjack_table = table
+                        print(f"[{time.strftime('%H:%M:%S')}]   -> ✅ Найдена таблица Railjack (Void Storms)")
+                
+                # Если не нашли по тексту, ищем по структуре
+                if not normal_table:
+                    for table in tables:
+                        # Проверяем наличие заголовков с Lith, Meso, Neo, Axi
+                        headers = table.find_all('th')
+                        header_texts = [h.get_text().strip() for h in headers]
+                        if any(relic in header_texts for relic in ['Lith', 'Meso', 'Neo', 'Axi']):
+                            if not any('steel' in h.lower() for h in header_texts):
+                                normal_table = table
+                                print(f"[{time.strftime('%H:%M:%S')}]   -> ✅ Найдена таблица обычных разрывов по заголовкам")
+                                break
                 
                 # Парсим найденные таблицы
                 if normal_table:
-                    normal_fissures = parse_fissure_table(normal_table, current_scrape_time, False)
+                    normal_fissures = parse_fissure_table(normal_table, current_scrape_time, False, False)
                     results["Fissures"] = normal_fissures
                     print(f"[{time.strftime('%H:%M:%S')}]   -> Обычные разрывы: {len(normal_fissures)}")
                 
                 if sp_table:
-                    sp_fissures = parse_fissure_table(sp_table, current_scrape_time, True)
+                    sp_fissures = parse_fissure_table(sp_table, current_scrape_time, True, False)
                     results["SteelPathFissures"] = sp_fissures
                     print(f"[{time.strftime('%H:%M:%S')}]   -> Разрывы SP: {len(sp_fissures)}")
+                
+                if railjack_table:
+                    railjack_fissures = parse_fissure_table(railjack_table, current_scrape_time, False, True)
+                    results["RailjackFissures"] = railjack_fissures
+                    print(f"[{time.strftime('%H:%M:%S')}]   -> Штормы RJ: {len(railjack_fissures)}")
+                
+                # Если не нашли Railjack таблицу, но есть миссии с "Void Storm" в обычных разрывах
+                if not railjack_table and normal_table:
+                    # Проверяем, есть ли Void Storm миссии в обычных разрывах
+                    void_storm_missions = []
+                    for fissure in results["Fissures"]:
+                        if "Void Storm" in fissure['Type'] or "Шторм" in fissure['Type']:
+                            void_storm_missions.append(fissure)
+                    
+                    if void_storm_missions:
+                        print(f"[{time.strftime('%H:%M:%S')}]   -> ⚠️ Найдены Void Storm миссии в обычных разрывах: {len(void_storm_missions)}")
+                        # Перемещаем их в RailjackFissures и удаляем из обычных
+                        results["RailjackFissures"] = void_storm_missions
+                        results["Fissures"] = [f for f in results["Fissures"] if f not in void_storm_missions]
+                        print(f"[{time.strftime('%H:%M:%S')}]   -> Обычные разрывы после очистки: {len(results['Fissures'])}")
+                        print(f"[{time.strftime('%H:%M:%S')}]   -> Штормы RJ после извлечения: {len(results['RailjackFissures'])}")
             
             await page.close()
             
         except Exception as e:
             print(f"[{time.strftime('%H:%M:%S')}] ⚠️ Ошибка быстрого скрапинга разрывов: {e}")
+            import traceback
+            traceback.print_exc()
         
         return results
 
@@ -2079,7 +2197,7 @@ async def fast_scraping_cycle():
             # Обрабатываем результаты
             if isinstance(fissures_result, Exception):
                 print(f"[{time.strftime('%H:%M:%S')}] ❌ Ошибка в скрапинге разрывов: {fissures_result}")
-                fissures_result = {"Fissures": [], "SteelPathFissures": []}
+                fissures_result = {"Fissures": [], "SteelPathFissures": [], "RailjackFissures": []}
                 SCRAPE_STATS["failed_scrapes"] += 1
                 SCRAPE_STATS["fissures_errors"] += 1
             
@@ -2093,6 +2211,7 @@ async def fast_scraping_cycle():
             combined_results = {
                 "Fissures": fissures_result.get("Fissures", []) if not isinstance(fissures_result, Exception) else [],
                 "SteelPathFissures": fissures_result.get("SteelPathFissures", []) if not isinstance(fissures_result, Exception) else [],
+                "RailjackFissures": fissures_result.get("RailjackFissures", []) if not isinstance(fissures_result, Exception) else [],
                 "ArbitrationSchedule": arbitration_result if not isinstance(arbitration_result, Exception) else {"Current": {}, "Upcoming": []}
             }
             
@@ -2114,7 +2233,7 @@ async def fast_scraping_cycle():
                 changes_detected = True
                 LAST_CHANGES["ArbitrationSchedule"] = True
             
-            # Для разрывов - сравниваем хеши
+            # Для обычных разрывов
             old_fissures_hash = hash(str(sorted(CURRENT_MISSION_STATE.get("Fissures", []), key=lambda x: x.get('Location', ''))))
             new_fissures_hash = hash(str(sorted(combined_results.get("Fissures", []), key=lambda x: x.get('Location', ''))))
             
@@ -2124,6 +2243,7 @@ async def fast_scraping_cycle():
                 changes_detected = True
                 LAST_CHANGES["Fissures"] = True
             
+            # Для разрывов стального пути
             old_sp_hash = hash(str(sorted(CURRENT_MISSION_STATE.get("SteelPathFissures", []), key=lambda x: x.get('Location', ''))))
             new_sp_hash = hash(str(sorted(combined_results.get("SteelPathFissures", []), key=lambda x: x.get('Location', ''))))
             
@@ -2132,6 +2252,16 @@ async def fast_scraping_cycle():
                 print(f"[{time.strftime('%H:%M:%S')}]   Старое: {len(CURRENT_MISSION_STATE.get('SteelPathFissures', []))}, Новое: {len(combined_results.get('SteelPathFissures', []))}")
                 changes_detected = True
                 LAST_CHANGES["SteelPathFissures"] = True
+            
+            # Для Railjack разрывов
+            old_rj_hash = hash(str(sorted(CURRENT_MISSION_STATE.get("RailjackFissures", []), key=lambda x: x.get('Location', ''))))
+            new_rj_hash = hash(str(sorted(combined_results.get("RailjackFissures", []), key=lambda x: x.get('Location', ''))))
+            
+            if old_rj_hash != new_rj_hash:
+                print(f"[{time.strftime('%H:%M:%S')}] 📢 Обнаружено изменение штормов RJ!")
+                print(f"[{time.strftime('%H:%M:%S')}]   Старое: {len(CURRENT_MISSION_STATE.get('RailjackFissures', []))}, Новое: {len(combined_results.get('RailjackFissures', []))}")
+                changes_detected = True
+                LAST_CHANGES["RailjackFissures"] = True
             
             # Обновляем состояние
             set_current_state(combined_results, start_time)
@@ -2149,6 +2279,9 @@ async def fast_scraping_cycle():
                 
                 if LAST_CHANGES.get("SteelPathFissures"):
                     tasks.append(asyncio.create_task(update_steel_path_channel(bot)))
+                
+                if LAST_CHANGES.get("RailjackFissures"):
+                    tasks.append(asyncio.create_task(update_railjack_channel(bot)))
                 
                 if tasks:
                     await asyncio.gather(*tasks)
@@ -2186,6 +2319,7 @@ class ChannelCache:
         self.last_arbitration_embed = None
         self.last_fissure_embed = None
         self.last_sp_embed = None
+        self.last_railjack_embed = None
         self.cache_lock = asyncio.Lock()
 
     async def should_update_channel(self, channel_type: str, new_embed: discord.Embed) -> bool:
@@ -2196,11 +2330,9 @@ class ChannelCache:
                     self.last_arbitration_embed = new_embed
                     return True
 
-                # Сравниваем только важные поля эмбеда
                 old_dict = self.last_arbitration_embed.to_dict()
                 new_dict = new_embed.to_dict()
 
-                # Игнорируем временные метки в сравнении
                 if 'footer' in old_dict:
                     old_dict.pop('footer', None)
                 if 'footer' in new_dict:
@@ -2244,6 +2376,24 @@ class ChannelCache:
 
                 if old_dict != new_dict:
                     self.last_sp_embed = new_embed
+                    return True
+                return False
+
+            elif channel_type == "railjack":
+                if self.last_railjack_embed is None:
+                    self.last_railjack_embed = new_embed
+                    return True
+
+                old_dict = self.last_railjack_embed.to_dict()
+                new_dict = new_embed.to_dict()
+
+                if 'footer' in old_dict:
+                    old_dict.pop('footer', None)
+                if 'footer' in new_dict:
+                    new_dict.pop('footer', None)
+
+                if old_dict != new_dict:
+                    self.last_railjack_embed = new_embed
                     return True
                 return False
 
@@ -2316,7 +2466,7 @@ def format_fissure_list_vertical(fissures: List[Dict[str, Any]]) -> str:
 def split_fissures_into_fields(fissures_content: str) -> List[Tuple[str, str]]:
     """Разбивает полный список миссий на поля Discord."""
     if not fissures_content:
-        return [("Нет активных Разрывов.", "\u200b")]
+        return [("Нет активных миссий.", "\u200b")]
 
     lines = fissures_content.split('\n')
     fields = []
@@ -2340,7 +2490,7 @@ def split_fissures_into_fields(fissures_content: str) -> List[Tuple[str, str]]:
         fields.append(("", field_value))
 
     if not fields:
-        return [("Нет активных Разрывов.", "\u200b")]
+        return [("Нет активных миссий.", "\u200b")]
 
     return fields
 
@@ -2567,7 +2717,7 @@ async def update_normal_fissure_channel(bot: commands.Bot):
     if not await channel_cache.should_update_channel("fissure", embed):
         return
 
-    lfg_view = FissureSelectView(normal_fissures, is_steel_path=False)
+    lfg_view = FissureSelectView(normal_fissures, is_steel_path=False, is_railjack=False)
 
     await send_or_edit_message('LAST_NORMAL_MESSAGE_ID', fissure_channel, embed, view=lfg_view)
 
@@ -2609,9 +2759,51 @@ async def update_steel_path_channel(bot: commands.Bot):
     if not await channel_cache.should_update_channel("steel_path", embed):
         return
 
-    lfg_view = FissureSelectView(steel_fissures, is_steel_path=True)
+    lfg_view = FissureSelectView(steel_fissures, is_steel_path=True, is_railjack=False)
 
     await send_or_edit_message('LAST_STEEL_MESSAGE_ID', sp_channel, embed, view=lfg_view)
+
+async def update_railjack_channel(bot: commands.Bot):
+    """Обновляет канал с Штормами Бездны (Railjack)."""
+    railjack_id = CONFIG.get('RAILJACK_CHANNEL_ID')
+    if not railjack_id:
+        return
+
+    railjack_channel = bot.get_channel(railjack_id)
+    if not railjack_channel:
+        return
+
+    data = CURRENT_MISSION_STATE
+    railjack_fissures = data.get("RailjackFissures", [])
+
+    # Если нет штормов, НЕ обновляем
+    if len(railjack_fissures) == 0:
+        return
+
+    railjack_content = format_fissure_list_vertical(railjack_fissures)
+
+    fields = split_fissures_into_fields(railjack_content)
+
+    railjack_emoji = RESOLVED_EMOJIS.get(EMOJI_NAMES.get(RAILJACK_EMOJI_KEY), "🚀")
+    title_text = f"      {railjack_emoji} ✦✦✦ ШТОРМЫ БЕЗДНЫ (RAILJACK) ✦✦✦      "
+
+    embed = discord.Embed(
+        title=title_text,
+        color=0x8A2BE2  # Фиолетовый для Railjack
+    )
+
+    for name, value in fields:
+        embed.add_field(name=name, value=value, inline=False)
+
+    embed.set_footer(text=f"Обновлено: {time.strftime('%H:%M:%S')} | Данные: browse.wf | Режим: реалтайм")
+
+    # Проверяем, нужно ли обновлять
+    if not await channel_cache.should_update_channel("railjack", embed):
+        return
+
+    lfg_view = FissureSelectView(railjack_fissures, is_steel_path=False, is_railjack=True)
+
+    await send_or_edit_message('LAST_RAILJACK_MESSAGE_ID', railjack_channel, embed, view=lfg_view)
 
 async def sync_get_earliest_tier_mission(tier: str, current_scrape_time: float) -> Optional[Dict[str, Any]]:
     """Получает ближайшую миссию определенного тира с использованием персистентного браузера."""
@@ -2716,6 +2908,10 @@ async def mission_update_task():
         if changes_to_process.get("SteelPathFissures"):
             print(f"[{time.strftime('%H:%M:%S')}] 📢 Обновление канала разрывов стального пути (обнаружены изменения)...")
             await update_steel_path_channel(bot)
+
+        if changes_to_process.get("RailjackFissures"):
+            print(f"[{time.strftime('%H:%M:%S')}] 📢 Обновление канала штормов RJ (обнаружены изменения)...")
+            await update_railjack_channel(bot)
     else:
         print(f"[{time.strftime('%H:%M:%S')}] ⏳ Ожидание первого успешного скрапинга...")
 
@@ -2767,7 +2963,7 @@ async def on_ready():
             embed.add_field(name="⚡ Режим", value="Быстрый скрапинг (5 секунд)", inline=False)
             embed.add_field(name="🌐 Render URL", value=RENDER_URL if RENDER_URL else "Не настроен", inline=False)
             embed.add_field(name="🔄 Авто-пинг", value="Включен (каждые 5 минут)", inline=False)
-            embed.add_field(name="🎯 Особенности", value="• Персистентный браузер\n• Мгновенное обновление\n• Кэширование данных", inline=False)
+            embed.add_field(name="🎯 Особенности", value="• Персистентный браузер\n• Мгновенное обновление\n• Кэширование данных\n• Отдельные каналы для Void Fissures и Void Storms", inline=False)
             embed.set_footer(text="Система мониторинга Warframe LFG Bot (Режим реалтайм)")
             await log_channel.send(embed=embed)
 
@@ -2791,6 +2987,7 @@ async def command_list(ctx):
             "`!set_arbitration_channel` - Установить текущий канал для Арбитражей\n"
             "`!set_normal_ruptures` - Установить канал для обычных Разрывов\n"
             "`!set_steel_path_ruptures` - Установить канал для Разрывов Стального Пути\n"
+            "`!set_railjack_channel` - Установить канал для Штормов Бездны (Railjack)\n"
             "`!set_lfg_channel [канал]` - Установить канал для поиска пати (LFG)\n"
             "`!set_log_channel [канал]` - Установить канал для логов и мониторинга"
         ),
@@ -2828,6 +3025,7 @@ async def command_list(ctx):
             "• Нажмите кнопки под сообщениями в каналах:\n"
             "  - **Арбитраж**: 'Создать пати на Арбитраж' или 'На текущий арбитраж'\n"
             "  - **Разрывы**: Выберите миссию из выпадающего списка\n"
+            "  - **Штормы RJ**: Выберите миссию из выпадающего списка\n"
             "• В тикете LFG можно:\n"
             "  - Занять свободные слоты\n"
             "  - Добавить комментарий\n"
@@ -2843,7 +3041,8 @@ async def command_list(ctx):
             "**Быстрый скрапинг:** каждые 5 секунд\n"
             "**Мгновенное обновление:** при обнаружении изменений\n"
             "**Персистентный браузер:** оптимизированная загрузка\n"
-            "**Кэширование:** снижение нагрузки на сайт"
+            "**Кэширование:** снижение нагрузки на сайт\n"
+            "**Отдельные каналы:** Void Fissures и Void Storms (Railjack)"
         ),
         inline=False
     )
@@ -2881,6 +3080,16 @@ async def set_steel_path_channel(ctx):
 
     await update_steel_path_channel(bot)
     await ctx.send(f"✅ Канал **Разрывов Пути Стали** установлен на: {ctx.channel.mention} и запущен.", delete_after=10)
+
+@bot.command(name='set_railjack_channel')
+@commands.has_permissions(manage_guild=True)
+async def set_railjack_channel(ctx):
+    """Устанавливает текущий канал как канал Штормов Бездны (Railjack)."""
+    CONFIG['RAILJACK_CHANNEL_ID'] = ctx.channel.id
+    save_config()
+
+    await update_railjack_channel(bot)
+    await ctx.send(f"✅ Канал **Штормов Бездны (Railjack)** установлен на: {ctx.channel.mention} и запущен.", delete_after=10)
 
 @bot.command(name='set_lfg_channel')
 @commands.has_permissions(manage_guild=True)
@@ -2949,6 +3158,7 @@ async def set_log_channel(ctx, channel: discord.TextChannel = None):
     arb_channel = CONFIG.get('ARBITRATION_CHANNEL_ID')
     fissure_channel = CONFIG.get('FISSURE_CHANNEL_ID')
     sp_channel = CONFIG.get('STEEL_PATH_CHANNEL_ID')
+    railjack_channel = CONFIG.get('RAILJACK_CHANNEL_ID')
     lfg_channel = CONFIG.get('LFG_CHANNEL_ID')
 
     if arb_channel:
@@ -2965,6 +3175,11 @@ async def set_log_channel(ctx, channel: discord.TextChannel = None):
         settings_info.append(f"**Канал SP:** <#{sp_channel}>")
     else:
         settings_info.append("**Канал SP:** ❌ Не настроен")
+
+    if railjack_channel:
+        settings_info.append(f"**Канал RJ:** <#{railjack_channel}>")
+    else:
+        settings_info.append("**Канал RJ:** ❌ Не настроен")
 
     if lfg_channel:
         settings_info.append(f"**Канал LFG:** <#{lfg_channel}>")
@@ -3013,6 +3228,7 @@ async def status_command(ctx):
     data_info = f"**Арбитраж:** {CURRENT_MISSION_STATE.get('ArbitrationSchedule', {}).get('Current', {}).get('Tier', 'N/A')}\n"
     data_info += f"**Обычные разрывы:** {len(CURRENT_MISSION_STATE.get('Fissures', []))}\n"
     data_info += f"**Разрывы SP:** {len(CURRENT_MISSION_STATE.get('SteelPathFissures', []))}\n"
+    data_info += f"**Штормы RJ:** {len(CURRENT_MISSION_STATE.get('RailjackFissures', []))}\n"
     data_info += f"**Render URL:** {RENDER_URL if RENDER_URL else 'Не настроен'}\n"
     data_info += f"**Режим:** Быстрый скрапинг (5 сек)"
 
@@ -3024,6 +3240,7 @@ async def status_command(ctx):
         ('ARBITRATION_CHANNEL_ID', 'Арбитраж'),
         ('FISSURE_CHANNEL_ID', 'Разрывы'),
         ('STEEL_PATH_CHANNEL_ID', 'Разрывы SP'),
+        ('RAILJACK_CHANNEL_ID', 'Штормы RJ'),
         ('LFG_CHANNEL_ID', 'LFG'),
         ('LOG_CHANNEL_ID', 'Логи')
     ]:
@@ -3051,6 +3268,7 @@ async def force_update(ctx):
     await update_arbitration_channel(bot)
     await update_normal_fissure_channel(bot)
     await update_steel_path_channel(bot)
+    await update_railjack_channel(bot)
 
     await ctx.send("✅ Все каналы обновлены!", delete_after=5)
 
@@ -3102,6 +3320,7 @@ if __name__ == '__main__':
     print(f"[{time.strftime('%H:%M:%S')}] Render URL: {RENDER_URL}")
     print(f"[{time.strftime('%H:%M:%S')}] Интервал скрапинга: {SCRAPE_INTERVAL_SECONDS} секунд")
     print(f"[{time.strftime('%H:%M:%S')}] Режим: Быстрый скрапинг с персистентным браузером")
+    print(f"[{time.strftime('%H:%M:%S')}] Каналы: Раздельные для Void Fissures и Void Storms (Railjack)")
     
     try:
         bot.run(BOT_TOKEN)
