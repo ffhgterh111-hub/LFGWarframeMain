@@ -1916,6 +1916,8 @@ async def scrape_fissures_fast():
     
     if not BROWSER_INITIALIZED or not PLAYWRIGHT_CONTEXT:
         if not await init_persistent_browser():
+            SCRAPE_STATS["failed_scrapes"] += 1
+            SCRAPE_STATS["fissures_errors"] += 1
             return {"Fissures": [], "SteelPathFissures": []}
     
     async with BROWSER_LOCK:
@@ -1943,7 +1945,7 @@ async def scrape_fissures_fast():
             print(f"[{time.strftime('%H:%M:%S')}] 🔄 Быстрый скрапинг разрывов...")
             response = await page.goto(
                 FISSURE_URL,
-                wait_until="domcontentloaded",  # Быстрее чем networkidle
+                wait_until="domcontentloaded",
                 timeout=10000
             )
             
@@ -1952,7 +1954,7 @@ async def scrape_fissures_fast():
                 try:
                     await page.wait_for_selector('table', timeout=5000)
                 except:
-                    pass  # Продолжаем даже если таблицы не найдены сразу
+                    pass
                 
                 # Небольшая пауза для рендеринга JavaScript
                 await asyncio.sleep(0.5)
@@ -1961,41 +1963,85 @@ async def scrape_fissures_fast():
                 html_content = await page.content()
                 soup = BeautifulSoup(html_content, 'html.parser')
                 
-                # Парсим таблицы
-                tables = soup.find_all('table')
+                # ИЩЕМ ПРАВИЛЬНЫЕ ТАБЛИЦЫ:
+                # 1. Таблица "Void Fissures (Normal)" для обычных разрывов
+                # 2. Таблица "Steel Path Fissures" для SP разрывов
                 
-                # Ищем таблицу обычных разрывов
+                # Находим все заголовки таблиц (h4 элементы)
+                all_h4 = soup.find_all('h4')
+                all_tables = soup.find_all('table')
+                
                 normal_table = None
                 sp_table = None
                 
-                for table in tables:
-                    table_html = str(table).lower()
+                # Проходим по всем заголовкам h4, чтобы найти нужные таблицы
+                for h4 in all_h4:
+                    h4_text = h4.text.strip()
                     
-                    # Таблица обычных разрывов
-                    if ('lith' in table_html or 'meso' in table_html or 
-                        'neo' in table_html or 'axi' in table_html):
-                        if 'steel path' not in table_html and 'sp-fissures' not in table_html:
+                    # Ищем заголовок "Void Fissures (Normal)"
+                    if "Void Fissures (Normal)" in h4_text:
+                        # Таблица обычно следует после заголовка
+                        next_sibling = h4.find_next_sibling('table')
+                        if next_sibling:
+                            normal_table = next_sibling
+                            print(f"[{time.strftime('%H:%M:%S')}]   -> Найдена таблица обычных разрывов")
+                    
+                    # Ищем заголовок "Steel Path Fissures"
+                    elif "Steel Path Fissures" in h4_text:
+                        next_sibling = h4.find_next_sibling('table')
+                        if next_sibling:
+                            sp_table = next_sibling
+                            print(f"[{time.strftime('%H:%M:%S')}]   -> Найдена таблица SP разрывов")
+                    
+                    # Ищем заголовок "Void Storms (Railjack)" - ЭТО НЕ ОБЫЧНЫЕ РАЗРЫВЫ!
+                    elif "Void Storms (Railjack)" in h4_text:
+                        print(f"[{time.strftime('%H:%M:%S')}]   -> Пропущена таблица Void Storms (Railjack)")
+                
+                # Если не нашли по заголовкам, ищем таблицы по содержимому
+                if not normal_table or not sp_table:
+                    for table in all_tables:
+                        table_html = str(table)
+                        
+                        # ОБЫЧНЫЕ РАЗРЫВЫ: содержат Lith, Meso, Neo, Axi, Requiem, но НЕ содержат "Railjack"
+                        if (('Lith' in table_html or 'Meso' in table_html or 
+                             'Neo' in table_html or 'Axi' in table_html or 
+                             'Requiem' in table_html or 'Omnia' in table_html) and
+                            'Railjack' not in table_html and 'Void Storm' not in table_html and
+                            not normal_table):
                             normal_table = table
-                    
-                    # Таблица Steel Path
-                    if 'sp-fissures' in table_html or 'steel path' in table_html:
-                        sp_table = table
+                            print(f"[{time.strftime('%H:%M:%S')}]   -> Найдена таблица обычных разрывов (по содержимому)")
+                        
+                        # SP РАЗРЫВЫ: содержат "Steel Path" или "SP-"
+                        elif (('Steel Path' in table_html or 'SP-' in table_html or 
+                               'sp-fissures' in table_html.lower()) and not sp_table):
+                            sp_table = table
+                            print(f"[{time.strftime('%H:%M:%S')}]   -> Найдена таблица SP разрывов (по содержимому)")
                 
                 # Парсим найденные таблицы
                 if normal_table:
                     normal_fissures = parse_fissure_table(normal_table, current_scrape_time, False)
                     results["Fissures"] = normal_fissures
                     print(f"[{time.strftime('%H:%M:%S')}]   -> Обычные разрывы: {len(normal_fissures)}")
+                else:
+                    print(f"[{time.strftime('%H:%M:%S')}]   ⚠️ Таблица обычных разрывов не найдена!")
                 
                 if sp_table:
                     sp_fissures = parse_fissure_table(sp_table, current_scrape_time, True)
                     results["SteelPathFissures"] = sp_fissures
                     print(f"[{time.strftime('%H:%M:%S')}]   -> Разрывы SP: {len(sp_fissures)}")
+                else:
+                    print(f"[{time.strftime('%H:%M:%S')}]   ⚠️ Таблица SP разрывов не найдена!")
             
             await page.close()
             
+            # Увеличиваем статистику успешных скрапов
+            if len(results["Fissures"]) > 0 or len(results["SteelPathFissures"]) > 0:
+                SCRAPE_STATS["successful_scrapes"] += 1
+                
         except Exception as e:
             print(f"[{time.strftime('%H:%M:%S')}] ⚠️ Ошибка быстрого скрапинга разрывов: {e}")
+            SCRAPE_STATS["failed_scrapes"] += 1
+            SCRAPE_STATS["fissures_errors"] += 1
         
         return results
 
@@ -2005,6 +2051,8 @@ async def scrape_arbitration_fast():
     
     if not BROWSER_INITIALIZED or not PLAYWRIGHT_CONTEXT:
         if not await init_persistent_browser():
+            SCRAPE_STATS["failed_scrapes"] += 1
+            SCRAPE_STATS["arbitration_errors"] += 1
             return {"Current": {}, "Upcoming": []}
     
     async with BROWSER_LOCK:
@@ -2040,14 +2088,21 @@ async def scrape_arbitration_fast():
                 await page.close()
                 
                 arb_tier = arbitration_data.get("Current", {}).get("Tier", "N/A")
-                print(f"[{time.strftime('%H:%M:%S')}]   -> Арбитраж: {arb_tier}")
+                arb_node = arbitration_data.get("Current", {}).get("Node", "N/A")
+                print(f"[{time.strftime('%H:%M:%S')}]   -> Арбитраж: {arb_tier} ({arb_node})")
                 
+                # Увеличиваем статистику успешных скрапов
+                if arb_node != "N/A":
+                    SCRAPE_STATS["successful_scrapes"] += 1
+                    
                 return arbitration_data
             
             await page.close()
             
         except Exception as e:
             print(f"[{time.strftime('%H:%M:%S')}] ⚠️ Ошибка быстрого скрапинга арбитража: {e}")
+            SCRAPE_STATS["failed_scrapes"] += 1
+            SCRAPE_STATS["arbitration_errors"] += 1
         
         return {"Current": {}, "Upcoming": []}
 
@@ -2082,12 +2137,16 @@ async def fast_scraping_cycle():
                 fissures_result = {"Fissures": [], "SteelPathFissures": []}
                 SCRAPE_STATS["failed_scrapes"] += 1
                 SCRAPE_STATS["fissures_errors"] += 1
+                SCRAPE_STATS["last_error"] = str(fissures_result)
+                SCRAPE_STATS["last_error_time"] = time.time()
             
             if isinstance(arbitration_result, Exception):
                 print(f"[{time.strftime('%H:%M:%S')}] ❌ Ошибка в скрапинге арбитража: {arbitration_result}")
                 arbitration_result = {"Current": {}, "Upcoming": []}
                 SCRAPE_STATS["failed_scrapes"] += 1
                 SCRAPE_STATS["arbitration_errors"] += 1
+                SCRAPE_STATS["last_error"] = str(arbitration_result)
+                SCRAPE_STATS["last_error_time"] = time.time()
             
             # Объединяем результаты
             combined_results = {
@@ -2171,6 +2230,9 @@ async def fast_scraping_cycle():
             
         except Exception as e:
             print(f"[{time.strftime('%H:%M:%S')}] 💥 Критическая ошибка в быстром скрапинге: {e}")
+            SCRAPE_STATS["failed_scrapes"] += 1
+            SCRAPE_STATS["last_error"] = str(e)
+            SCRAPE_STATS["last_error_time"] = time.time()
             import traceback
             traceback.print_exc()
             await asyncio.sleep(10)  # Пауза при критической ошибке
@@ -2208,7 +2270,9 @@ class ChannelCache:
 
                 if old_dict != new_dict:
                     self.last_arbitration_embed = new_embed
+                    SCRAPE_STATS["cache_misses"] += 1
                     return True
+                SCRAPE_STATS["cache_hits"] += 1
                 return False
 
             elif channel_type == "fissure":
@@ -2226,7 +2290,9 @@ class ChannelCache:
 
                 if old_dict != new_dict:
                     self.last_fissure_embed = new_embed
+                    SCRAPE_STATS["cache_misses"] += 1
                     return True
+                SCRAPE_STATS["cache_hits"] += 1
                 return False
 
             elif channel_type == "steel_path":
@@ -2244,7 +2310,9 @@ class ChannelCache:
 
                 if old_dict != new_dict:
                     self.last_sp_embed = new_embed
+                    SCRAPE_STATS["cache_misses"] += 1
                     return True
+                SCRAPE_STATS["cache_hits"] += 1
                 return False
 
             return True
