@@ -16,7 +16,7 @@ from cachetools import TTLCache
 import aiohttp
 
 # ИМПОРТ ASYNC PLAYWRIGHT
-from playwright.async_api import async_playwright, Browser, BrowserContext, Page
+from playwright.async_api import async_playwright
 from bs4 import BeautifulSoup, Tag
 
 # Импорт health сервера
@@ -42,17 +42,17 @@ ARBY_URL = 'https://browse.wf/arbys#days=30&tz=utc&hourfmt=24'
 FISSURE_URL = 'https://browse.wf/live'
 
 CONFIG_FILE = 'config.json'
-SCRAPE_INTERVAL_SECONDS = 5  # Увеличили интервал для уменьшения нагрузки
-MISSION_UPDATE_INTERVAL_SECONDS = 15  # Увеличили интервал обновления
+SCRAPE_INTERVAL_SECONDS = 2  # Уменьшили интервал для более частых проверок
+MISSION_UPDATE_INTERVAL_SECONDS = 5  # Уменьшили интервал обновления
 MAX_FIELD_LENGTH = 1000
 
 # --- КЭШИРОВАНИЕ ---
-# Кэш для арбитражей (5 минут)
-ARBITRATION_CACHE = TTLCache(maxsize=10, ttl=300)
-# Кэш для разрывов (2 минуты)
-FISSURE_CACHE = TTLCache(maxsize=10, ttl=120)
-# Кэш для тиров (30 минут)
-TIER_CACHE = TTLCache(maxsize=5, ttl=1800)
+# Кэш для арбитражей (2 минуты)
+ARBITRATION_CACHE = TTLCache(maxsize=10, ttl=120)
+# Кэш для разрывов (1 минута)
+FISSURE_CACHE = TTLCache(maxsize=10, ttl=60)
+# Кэш для тиров (10 минут)
+TIER_CACHE = TTLCache(maxsize=5, ttl=600)
 
 # --- ГЛОБАЛЬНОЕ СОСТОЯНИЕ ---
 CURRENT_MISSION_STATE = {
@@ -198,7 +198,208 @@ MISSION_TYPE_TRANSLATIONS = {
 }
 
 # =================================================================
-# 2. УТИЛИТЫ И КОНФИГУРАЦИЯ
+# 2. КЛАСС ПОСТОЯННОГО БРАУЗЕРА ДЛЯ РЕАЛЬНОГО ВРЕМЕНИ
+# =================================================================
+
+class PersistentBrowser:
+    """Класс для управления браузером с постоянным подключением."""
+    
+    def __init__(self):
+        self.playwright = None
+        self.browser = None
+        self.context = None
+        self.fissure_page = None
+        self.arbitration_page = None
+        self.is_running = False
+        self.lock = asyncio.Lock()
+        self.last_fissure_content = None
+        self.last_arbitration_content = None
+        
+    async def start(self):
+        """Запускает браузер и создает постоянные страницы."""
+        try:
+            print(f"[{time.strftime('%H:%M:%S')}] 🚀 Запуск постоянного браузера...")
+            
+            self.playwright = await async_playwright().start()
+            self.browser = await self.playwright.chromium.launch(
+                headless=True,
+                args=[
+                    '--disable-gpu',
+                    '--disable-dev-shm-usage',
+                    '--disable-setuid-sandbox',
+                    '--no-sandbox',
+                    '--disable-blink-features=AutomationControlled'
+                ]
+            )
+            
+            # Создаем контекст с оптимизированными настройками
+            self.context = await self.browser.new_context(
+                viewport={'width': 1920, 'height': 1080},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                java_script_enabled=True,
+                bypass_csp=True,
+                ignore_https_errors=True
+            )
+            
+            # Создаем страницу для разрывов
+            print(f"[{time.strftime('%H:%M:%S')}]   -> Создаем страницу для разрывов...")
+            self.fissure_page = await self.context.new_page()
+            await self.fissure_page.set_default_timeout(10000)
+            
+            # Создаем страницу для арбитража
+            print(f"[{time.strftime('%H:%M:%S')}]   -> Создаем страницу для арбитража...")
+            self.arbitration_page = await self.context.new_page()
+            await self.arbitration_page.set_default_timeout(10000)
+            
+            # Начальная загрузка страниц
+            print(f"[{time.strftime('%H:%M:%S')}]   -> Начальная загрузка страниц...")
+            await self._initial_load()
+            
+            self.is_running = True
+            print(f"[{time.strftime('%H:%M:%S')}] ✅ Постоянный браузер запущен")
+            
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] ❌ Ошибка запуска браузера: {e}")
+            await self.cleanup()
+            raise
+    
+    async def _initial_load(self):
+        """Начальная загрузка страниц."""
+        try:
+            # Загружаем страницу разрывов
+            print(f"[{time.strftime('%H:%M:%S')}]   -> Загрузка страницы разрывов...")
+            await self.fissure_page.goto(
+                FISSURE_URL,
+                wait_until="networkidle",
+                timeout=15000
+            )
+            await self.fissure_page.wait_for_selector('table', timeout=10000)
+            print(f"[{time.strftime('%H:%M:%S')}]   -> Страница разрывов загружена")
+            
+            # Загружаем страницу арбитража
+            print(f"[{time.strftime('%H:%M:%S')}]   -> Загрузка страницы арбитража...")
+            await self.arbitration_page.goto(
+                ARBY_URL,
+                wait_until="networkidle",
+                timeout=15000
+            )
+            await self.arbitration_page.wait_for_selector('#log', timeout=10000)
+            print(f"[{time.strftime('%H:%M:%S')}]   -> Страница арбитража загружена")
+            
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] ⚠️ Ошибка начальной загрузки: {e}")
+    
+    async def cleanup(self):
+        """Очищает ресурсы браузера."""
+        try:
+            if self.fissure_page:
+                await self.fissure_page.close()
+            if self.arbitration_page:
+                await self.arbitration_page.close()
+            if self.context:
+                await self.context.close()
+            if self.browser:
+                await self.browser.close()
+            if self.playwright:
+                await self.playwright.stop()
+        except:
+            pass
+        finally:
+            self.is_running = False
+    
+    async def refresh_fissure_page(self):
+        """Обновляет страницу разрывов."""
+        async with self.lock:
+            try:
+                print(f"[{time.strftime('%H:%M:%S')}]   -> Обновление страницы разрывов...")
+                await self.fissure_page.reload(
+                    wait_until="networkidle",
+                    timeout=10000
+                )
+                await self.fissure_page.wait_for_selector('table', timeout=8000)
+                self.last_fissure_content = await self.fissure_page.content()
+                print(f"[{time.strftime('%H:%M:%S')}]   -> Страница разрывов обновлена")
+                return True
+            except Exception as e:
+                print(f"[{time.strftime('%H:%M:%S')}] ⚠️ Ошибка обновления страницы разрывов: {e}")
+                return False
+    
+    async def refresh_arbitration_page(self):
+        """Обновляет страницу арбитража."""
+        async with self.lock:
+            try:
+                print(f"[{time.strftime('%H:%M:%S')}]   -> Обновление страницы арбитража...")
+                await self.arbitration_page.reload(
+                    wait_until="networkidle",
+                    timeout=10000
+                )
+                await self.arbitration_page.wait_for_selector('#log', timeout=8000)
+                self.last_arbitration_content = await self.arbitration_page.content()
+                print(f"[{time.strftime('%H:%M:%S')}]   -> Страница арбитража обновлена")
+                return True
+            except Exception as e:
+                print(f"[{time.strftime('%H:%M:%S')}] ⚠️ Ошибка обновления страницы арбитража: {e}")
+                return False
+    
+    async def get_fissure_content(self):
+        """Получает HTML контент страницы разрывов."""
+        async with self.lock:
+            if not self.fissure_page or not self.is_running:
+                return None
+            try:
+                # Используем кэшированный контент или получаем новый
+                if self.last_fissure_content:
+                    return self.last_fissure_content
+                return await self.fissure_page.content()
+            except:
+                return None
+    
+    async def get_arbitration_content(self):
+        """Получает HTML контент страницы арбитража."""
+        async with self.lock:
+            if not self.arbitration_page or not self.is_running:
+                return None
+            try:
+                if self.last_arbitration_content:
+                    return self.last_arbitration_content
+                return await self.arbitration_page.content()
+            except:
+                return None
+    
+    async def quick_fissure_check(self):
+        """Быстрая проверка разрывов без перезагрузки страницы."""
+        async with self.lock:
+            if not self.fissure_page or not self.is_running:
+                return None
+            try:
+                # Быстрая проверка текущего контента
+                content = await self.fissure_page.content()
+                if content != self.last_fissure_content:
+                    self.last_fissure_content = content
+                    return content
+                return None  # Нет изменений
+            except:
+                return None
+    
+    async def quick_arbitration_check(self):
+        """Быстрая проверка арбитража без перезагрузки страницы."""
+        async with self.lock:
+            if not self.arbitration_page or not self.is_running:
+                return None
+            try:
+                content = await self.arbitration_page.content()
+                if content != self.last_arbitration_content:
+                    self.last_arbitration_content = content
+                    return content
+                return None
+            except:
+                return None
+
+# Создаем глобальный экземпляр браузера
+persistent_browser = PersistentBrowser()
+
+# =================================================================
+# 3. УТИЛИТЫ И КОНФИГУРАЦИЯ
 # =================================================================
 
 def parse_time_to_seconds(time_str: str) -> int:
@@ -329,7 +530,7 @@ def extract_faction_from_mission_description(description: str) -> Optional[str]:
             elif 'орокин' in faction_text or 'corrupted' in faction_text:
                 return 'Орокин'
             elif 'шепот' in faction_text or 'murmur' in faction_text:
-                return 'Шёпот'
+                return 'Шёпot'
 
     # Ищем в формате "Миссия: Casta (Гринир) - Оборона"
     mission_pattern = r'\(([^)]+)\)\s*-\s*\w+'
@@ -462,7 +663,8 @@ async def update_log_message(bot: commands.Bot):
             f"**Соединение:** {connection_status}\n"
             f"**Серверов:** {len(bot.guilds)}\n"
             f"**Пользователей:** {len(bot.users)}\n"
-            f"**Render URL:** {RENDER_URL if RENDER_URL else 'Не настроен'}"
+            f"**Render URL:** {RENDER_URL if RENDER_URL else 'Не настроен'}\n"
+            f"**Браузер:** {'🟢 Активен' if persistent_browser.is_running else '🔴 Неактивен'}"
         ),
         inline=False
     )
@@ -602,7 +804,7 @@ def resolve_custom_emojis(bot: commands.Bot):
 load_config()
 
 # =================================================================
-# 3. БЫСТРЫЕ ФУНКЦИИ СРАВНЕНИЯ СОСТОЯНИЙ
+# 4. БЫСТРЫЕ ФУНКЦИИ СРАВНЕНИЯ СОСТОЯНИЙ
 # =================================================================
 
 def create_fissure_key(fissure: Dict[str, Any]) -> str:
@@ -628,7 +830,7 @@ def compare_fissures_fast(old_fissures: List[Dict], new_fissures: List[Dict]) ->
     return old_keys == new_keys
 
 def compare_arbitration_schedule_fast(old_schedule: Dict, new_schedule: Dict) -> bool:
-    """Быстрое сравнение расписания арбитражей."""
+    """Быстрое сравнение расписания арбитражей с учетом времени."""
     old_current = old_schedule.get('Current', {})
     new_current = new_schedule.get('Current', {})
 
@@ -647,6 +849,12 @@ def compare_arbitration_schedule_fast(old_schedule: Dict, new_schedule: Dict) ->
     for field in key_fields:
         if old_current.get(field) != new_current.get(field):
             return False
+
+    # СРАВНИВАЕМ ВРЕМЯ с точностью до минуты
+    old_time = old_current.get('TargetTimestamp', 0)
+    new_time = new_current.get('TargetTimestamp', 0)
+    if abs(old_time - new_time) > 60:  # Если разница больше минуты
+        return False
 
     # Быстрая проверка upcoming (только количество)
     if len(old_schedule.get('Upcoming', [])) != len(new_schedule.get('Upcoming', [])):
@@ -719,7 +927,7 @@ def set_current_state(data: Dict[str, Any], scrape_time: float):
     return changes
 
 # =================================================================
-# 4. КЛАССЫ ДЛЯ LFG СИСТЕМЫ (ПОИСК ПАТИ)
+# 5. КЛАССЫ ДЛЯ LFG СИСТЕМЫ (ПОИСК ПАТИ)
 # =================================================================
 
 class CommentModal(discord.ui.Modal, title='Добавить комментарий к тикету'):
@@ -1062,7 +1270,7 @@ class LFGTicketView(discord.ui.View):
         return embed
 
 # =================================================================
-# 5. VIEW ДЛЯ ВЫБОРА МИССИЙ В КАНАЛАХ
+# 6. VIEW ДЛЯ ВЫБОРА МИССИЙ В КАНАЛАХ
 # =================================================================
 
 class FissureSelectView(discord.ui.View):
@@ -1277,7 +1485,7 @@ class CreateTicketButton(discord.ui.Button):
         )
 
 # =================================================================
-# 6. АРБИТРАЖ: ПОЭТАПНЫЙ ВЫБОР
+# 7. АРБИТРАЖ: ПОЭТАПНЫЙ ВЫБОР
 # =================================================================
 
 class MapSelect(discord.ui.Select):
@@ -1649,312 +1857,8 @@ class ArbitrationLfgView(discord.ui.View):
         )
 
 # =================================================================
-# 7. РЕАЛТАЙМ МОНИТОРИНГ С ПОСТОЯННЫМ БРАУЗЕРОМ
+# 8. ОПТИМИЗИРОВАННАЯ ЛОГИКА СКРАПИНГА С ПОСТОЯННЫМ БРАУЗЕРОМ
 # =================================================================
-
-class RealTimeMonitor:
-    """Реалтайм мониторинг с постоянным браузером."""
-    
-    def __init__(self):
-        self.browser: Optional[Browser] = None
-        self.context: Optional[BrowserContext] = None
-        self.fissures_page: Optional[Page] = None
-        self.arbitration_page: Optional[Page] = None
-        self.playwright_instance = None
-        self.is_running = False
-        self.check_interval = 5  # Проверка каждые 5 секунд
-        
-    async def start(self):
-        """Запуск постоянного мониторинга."""
-        print(f"[{time.strftime('%H:%M:%S')}] 🚀 Запуск реалтайм мониторинга...")
-        
-        try:
-            # Запускаем браузер
-            self.playwright_instance = await async_playwright().start()
-            self.browser = await self.playwright_instance.chromium.launch(
-                headless=True,
-                args=[
-                    '--disable-dev-shm-usage',
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-accelerated-2d-canvas',
-                    '--disable-gpu',
-                    '--window-size=1920,1080'
-                ]
-            )
-            
-            # Создаем контекст
-            self.context = await self.browser.new_context(
-                viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                device_scale_factor=1,
-                locale='ru-RU'
-            )
-            
-            # Настраиваем страницу для разрывов
-            await self._setup_fissures_page()
-            
-            # Настраиваем страницу для арбитража
-            await self._setup_arbitration_page()
-            
-            self.is_running = True
-            print(f"[{time.strftime('%H:%M:%S')}] ✅ Реалтайм мониторинг запущен")
-            
-            # Запускаем мониторинг в фоне
-            asyncio.create_task(self._monitoring_loop())
-            
-        except Exception as e:
-            print(f"[{time.strftime('%H:%M:%S')}] ❌ Ошибка запуска реалтайм мониторинга: {e}")
-            await self.stop()
-            
-    async def _setup_fissures_page(self):
-        """Настройка страницы для мониторинга разрывов."""
-        self.fissures_page = await self.context.new_page()
-        await self.fissures_page.set_default_timeout(30000)
-        
-        # Добавляем заголовки
-        await self.fissures_page.set_extra_http_headers({
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3',
-            'Accept-Encoding': 'gzip, deflate, br',
-        })
-        
-        # Загружаем страницу
-        print(f"[{time.strftime('%H:%M:%S')}]   -> Загрузка страницы разрывов...")
-        response = await self.fissures_page.goto(
-            FISSURE_URL,
-            wait_until="networkidle",  # Ждем полной загрузки
-            timeout=45000
-        )
-        
-        if not response or response.status != 200:
-            raise Exception(f"Не удалось загрузить страницу разрывов: {response.status if response else 'нет ответа'}")
-            
-        # Ждем появления таблиц
-        try:
-            await self.fissures_page.wait_for_selector('table', timeout=20000)
-        except:
-            # Пробуем перезагрузить
-            await self.fissures_page.reload(wait_until="networkidle", timeout=30000)
-            await self.fissures_page.wait_for_selector('table', timeout=20000)
-            
-        print(f"[{time.strftime('%H:%M:%S')}]   -> Страница разрывов готова")
-        
-    async def _setup_arbitration_page(self):
-        """Настройка страницы для мониторинга арбитража."""
-        self.arbitration_page = await self.context.new_page()
-        await self.arbitration_page.set_default_timeout(30000)
-        
-        # Загружаем страницу
-        print(f"[{time.strftime('%H:%M:%S')}]   -> Загрузка страницы арбитража...")
-        response = await self.arbitration_page.goto(
-            ARBY_URL,
-            wait_until="networkidle",
-            timeout=45000
-        )
-        
-        if not response or response.status != 200:
-            raise Exception(f"Не удалось загрузить страницу арбитража: {response.status if response else 'нет ответа'}")
-            
-        # Ждем появления лога
-        try:
-            await self.arbitration_page.wait_for_selector('#log', timeout=20000)
-        except:
-            # Пробуем перезагрузить
-            await self.arbitration_page.reload(wait_until="networkidle", timeout=30000)
-            await self.arbitration_page.wait_for_selector('#log', timeout=20000)
-            
-        print(f"[{time.strftime('%H:%M:%S')}]   -> Страница арбитража готова")
-        
-    async def _monitoring_loop(self):
-        """Основной цикл мониторинга."""
-        print(f"[{time.strftime('%H:%M:%S')}] 🔄 Начало цикла мониторинга (интервал: {self.check_interval}с)")
-        
-        while self.is_running:
-            try:
-                start_time = time.time()
-                
-                # Параллельный мониторинг разрывов и арбитража
-                fissures_task = asyncio.create_task(self._check_fissures())
-                arbitration_task = asyncio.create_task(self._check_arbitration())
-                
-                # Ждем завершения обоих задач
-                fissures_data = await fissures_task
-                arbitration_data = await arbitration_task
-                
-                # Обновляем состояние
-                current_time = time.time()
-                results = {
-                    "Fissures": fissures_data.get("Fissures", []),
-                    "SteelPathFissures": fissures_data.get("SteelPathFissures", []),
-                    "ArbitrationSchedule": arbitration_data.get("ArbitrationSchedule", {})
-                }
-                
-                # Устанавливаем состояние и проверяем изменения
-                changes = set_current_state(results, current_time)
-                
-                # Если есть изменения, обновляем каналы
-                if any(changes.values()):
-                    print(f"[{time.strftime('%H:%M:%S')}] 📢 Обнаружены изменения: {[k for k, v in changes.items() if v]}")
-                    
-                    # Обновляем каналы через основной цикл бота
-                    for channel_type, changed in changes.items():
-                        if changed:
-                            asyncio.create_task(self._update_channel(channel_type))
-                
-                # Пауза до следующей проверки
-                elapsed = time.time() - start_time
-                sleep_time = max(1.0, self.check_interval - elapsed)
-                await asyncio.sleep(sleep_time)
-                
-            except Exception as e:
-                print(f"[{time.strftime('%H:%M:%S')}] ⚠️ Ошибка в цикле мониторинга: {e}")
-                await asyncio.sleep(10)  # Пауза при ошибке
-                
-    async def _check_fissures(self) -> Dict[str, Any]:
-        """Проверяет состояние разрывов."""
-        try:
-            if not self.fissures_page or self.fissures_page.is_closed():
-                await self._setup_fissures_page()
-                
-            # Обновляем страницу если нужно
-            current_time = time.time()
-            
-            # Получаем HTML контент
-            html_content = await self.fissures_page.content()
-            soup_fissures = BeautifulSoup(html_content, 'html.parser')
-            
-            # Ищем таблицы
-            tables = soup_fissures.find_all('table')
-            
-            # Ищем таблицу обычных разрывов
-            normal_table = None
-            sp_table = None
-            
-            for table in tables:
-                table_html = str(table).lower()
-                
-                # Обычные разрывы
-                if (('lith' in table_html and 'meso' in table_html and 'neo' in table_html and 'axi' in table_html) 
-                    or 'fissures-table' in table_html):
-                    if 'steel path' not in table_html and 'sp-fissures' not in table_html:
-                        normal_table = table
-                        
-                # Steel Path разрывы
-                if 'sp-fissures' in table_html or 'steel path' in table_html:
-                    sp_table = table
-                    
-            # Если не нашли, пробуем по ID
-            if not normal_table:
-                normal_table = soup_fissures.find('table', id='fissures-table')
-            if not sp_table:
-                sp_table = soup_fissures.find('table', id='sp-fissures-table')
-                
-            # Парсим данные
-            normal_fissures = []
-            sp_fissures = []
-            
-            if normal_table:
-                normal_fissures = parse_fissure_table(normal_table, current_time, False)
-                
-            if sp_table:
-                sp_fissures = parse_fissure_table(sp_table, current_time, True)
-                
-            return {
-                "Fissures": normal_fissures,
-                "SteelPathFissures": sp_fissures
-            }
-            
-        except Exception as e:
-            print(f"[{time.strftime('%H:%M:%S')}] ⚠️ Ошибка проверки разрывов: {e}")
-            # Пробуем восстановить страницу
-            try:
-                await self._setup_fissures_page()
-            except:
-                pass
-            return {"Fissures": [], "SteelPathFissures": []}
-            
-    async def _check_arbitration(self) -> Dict[str, Any]:
-        """Проверяет состояние арбитража."""
-        try:
-            if not self.arbitration_page or self.arbitration_page.is_closed():
-                await self._setup_arbitration_page()
-                
-            current_time = time.time()
-            
-            # Получаем HTML контент
-            html_content = await self.arbitration_page.content()
-            soup_arbys = BeautifulSoup(html_content, 'html.parser')
-            
-            # Парсим данные
-            arbitration_data = parse_arbitration_schedule(soup_arbys, current_time)
-            
-            return {
-                "ArbitrationSchedule": arbitration_data
-            }
-            
-        except Exception as e:
-            print(f"[{time.strftime('%H:%M:%S')}] ⚠️ Ошибка проверки арбитража: {e}")
-            # Пробуем восстановить страницу
-            try:
-                await self._setup_arbitration_page()
-            except:
-                pass
-            return {"ArbitrationSchedule": {}}
-            
-    async def _update_channel(self, channel_type: str):
-        """Обновляет указанный канал через основной бот."""
-        try:
-            if channel_type == "ArbitrationSchedule":
-                await update_arbitration_channel(bot)
-            elif channel_type == "Fissures":
-                await update_normal_fissure_channel(bot)
-            elif channel_type == "SteelPathFissures":
-                await update_steel_path_channel(bot)
-        except Exception as e:
-            print(f"[{time.strftime('%H:%M:%S')}] ❌ Ошибка обновления канала {channel_type}: {e}")
-            
-    async def stop(self):
-        """Останавливает мониторинг."""
-        self.is_running = False
-        
-        # Закрываем страницы
-        try:
-            if self.fissures_page and not self.fissures_page.is_closed():
-                await self.fissures_page.close()
-        except:
-            pass
-            
-        try:
-            if self.arbitration_page and not self.arbitration_page.is_closed():
-                await self.arbitration_page.close()
-        except:
-            pass
-            
-        # Закрываем контекст и браузер
-        try:
-            if self.context:
-                await self.context.close()
-        except:
-            pass
-            
-        try:
-            if self.browser:
-                await self.browser.close()
-        except:
-            pass
-            
-        # Закрываем playwright
-        try:
-            if self.playwright_instance:
-                await self.playwright_instance.stop()
-        except:
-            pass
-            
-        print(f"[{time.strftime('%H:%M:%S')}] 🛑 Реалтайм мониторинг остановлен")
-
-# Создаем глобальный экземпляр монитора
-real_time_monitor = RealTimeMonitor()
 
 def parse_arbitration_schedule(soup: BeautifulSoup, current_scrape_time: float) -> Dict[str, Any]:
     """Парсит данные о расписании Арбитражей."""
@@ -2144,10 +2048,6 @@ def parse_fissure_table(table: Tag, current_scrape_time: float, is_steel_path_ta
 
     return fissures_list
 
-# ThreadPoolExecutor для запуска синхронных задач в отдельных потоках
-from concurrent.futures import ThreadPoolExecutor
-executor = ThreadPoolExecutor(max_workers=1)
-
 def get_cached_arbitration():
     """Получает данные арбитража из кэша."""
     cache_key = "arbitration_current"
@@ -2157,7 +2057,7 @@ def get_cached_arbitration():
     SCRAPE_STATS["cache_misses"] += 1
     return None
 
-def set_cached_arbitration(data, ttl=300):
+def set_cached_arbitration(data, ttl=120):
     """Сохраняет данные арбитража в кэш."""
     cache_key = "arbitration_current"
     ARBITRATION_CACHE[cache_key] = data
@@ -2171,7 +2071,7 @@ def get_cached_fissures(fissure_type="normal"):
     SCRAPE_STATS["cache_misses"] += 1
     return None
 
-def set_cached_fissures(data, fissure_type="normal", ttl=120):
+def set_cached_fissures(data, fissure_type="normal", ttl=60):
     """Сохраняет данные разрывов в кэш."""
     cache_key = f"fissures_{fissure_type}"
     FISSURE_CACHE[cache_key] = data
@@ -2185,13 +2085,202 @@ def get_cached_tier_mission(tier):
     SCRAPE_STATS["cache_misses"] += 1
     return None
 
-def set_cached_tier_mission(tier, data, ttl=1800):
+def set_cached_tier_mission(tier, data, ttl=600):
     """Сохраняет данные тира в кэш."""
     cache_key = f"tier_{tier}"
     TIER_CACHE[cache_key] = data
 
+async def scrape_with_persistent_browser():
+    """Скрапит данные с использованием постоянного браузера."""
+    current_scrape_time = time.time()
+    results = {"Fissures": [], "SteelPathFissures": [], "ArbitrationSchedule": {}}
+    
+    SCRAPE_STATS["total_scrapes"] += 1
+    
+    # Быстрая проверка доступности браузера
+    if not persistent_browser.is_running:
+        print(f"[{time.strftime('%H:%M:%S')}] ⚠️ Браузер не запущен, пытаемся восстановить...")
+        try:
+            await persistent_browser.start()
+            await asyncio.sleep(2)
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] ❌ Не удалось запустить браузер: {e}")
+            SCRAPE_STATS["failed_scrapes"] += 1
+            SCRAPE_STATS["last_error"] = f"Браузер не запущен: {str(e)}"
+            SCRAPE_STATS["last_error_time"] = time.time()
+            return results
+    
+    # Параллельный сбор данных
+    tasks = []
+    
+    # Задача для разрывов
+    async def scrape_fissures():
+        try:
+            # Быстрая проверка без перезагрузки
+            changed_content = await persistent_browser.quick_fissure_check()
+            
+            # Если нет изменений, используем кэш
+            if changed_content is None:
+                cached = get_cached_fissures("normal")
+                if cached:
+                    results["Fissures"] = cached
+                    return
+            
+            # Получаем контент страницы разрывов
+            content = await persistent_browser.get_fissure_content()
+            if not content:
+                print(f"[{time.strftime('%H:%M:%S')}] ⚠️ Не удалось получить контент разрывов")
+                SCRAPE_STATS["fissures_errors"] += 1
+                return
+            
+            soup_fissures = BeautifulSoup(content, 'html.parser')
+            
+            # Ищем таблицы
+            tables = soup_fissures.find_all('table')
+            
+            normal_table = None
+            sp_table = None
+            
+            for table in tables:
+                table_html = str(table).lower()
+                
+                # Ищем обычные разрывы
+                if ('lith' in table_html and 'meso' in table_html and 
+                    'neo' in table_html and 'axi' in table_html):
+                    if 'steel path' not in table_html:
+                        normal_table = table
+                        break
+            
+            # Ищем SP отдельно
+            for table in tables:
+                table_html = str(table).lower()
+                if 'sp-fissures' in table_html or 'steel path' in table_html:
+                    sp_table = table
+                    break
+            
+            # Парсим таблицы
+            if normal_table:
+                normal_fissures = parse_fissure_table(normal_table, current_scrape_time, False)
+                results["Fissures"] = normal_fissures
+                set_cached_fissures(normal_fissures, "normal")
+            
+            if sp_table:
+                sp_fissures = parse_fissure_table(sp_table, current_scrape_time, True)
+                results["SteelPathFissures"] = sp_fissures
+                set_cached_fissures(sp_fissures, "steel_path")
+                
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] 🚨 Ошибка скрапинга разрывов: {e}")
+            SCRAPE_STATS["fissures_errors"] += 1
+    
+    # Задача для арбитража
+    async def scrape_arbitration():
+        try:
+            # Быстрая проверка без перезагрузки
+            changed_content = await persistent_browser.quick_arbitration_check()
+            
+            # Если нет изменений, используем кэш
+            if changed_content is None:
+                cached = get_cached_arbitration()
+                if cached:
+                    results["ArbitrationSchedule"] = cached
+                    return
+            
+            # Получаем контент страницы арбитража
+            content = await persistent_browser.get_arbitration_content()
+            if not content:
+                print(f"[{time.strftime('%H:%M:%S')}] ⚠️ Не удалось получить контент арбитража")
+                SCRAPE_STATS["arbitration_errors"] += 1
+                return
+            
+            soup_arbys = BeautifulSoup(content, 'html.parser')
+            arbitration_data = parse_arbitration_schedule(soup_arbys, current_scrape_time)
+            results["ArbitrationSchedule"] = arbitration_data
+            set_cached_arbitration(arbitration_data)
+            
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] 🚨 Ошибка скрапинга арбитража: {e}")
+            SCRAPE_STATS["arbitration_errors"] += 1
+    
+    # Запускаем задачи параллельно
+    tasks.append(asyncio.create_task(scrape_fissures()))
+    tasks.append(asyncio.create_task(scrape_arbitration()))
+    
+    # Ждем завершения всех задач
+    await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Определяем изменения
+    changes = set_current_state(results, current_scrape_time)
+    
+    changed_channels = []
+    if changes.get("ArbitrationSchedule"):
+        changed_channels.append("Арбитраж")
+    if changes.get("Fissures"):
+        changed_channels.append("Обычные разрывы")
+    if changes.get("SteelPathFissures"):
+        changed_channels.append("Разрывы стального пути")
+    
+    if changed_channels:
+        print(f"[{time.strftime('%H:%M:%S')}] 📢 Обнаружены изменения в: {', '.join(changed_channels)}")
+    
+    SCRAPE_STATS["successful_scrapes"] += 1
+    
+    return results
+
+async def aggressive_continuous_scraping():
+    """Агрессивный непрерывный скрапинг с минимальными интервалами."""
+    print(f"[{time.strftime('%H:%M:%S')}] 🚀 Запуск агрессивного скрапинга...")
+    
+    # Инициализируем браузер
+    try:
+        await persistent_browser.start()
+        print(f"[{time.strftime('%H:%M:%S')}] ✅ Браузер запущен")
+    except Exception as e:
+        print(f"[{time.strftime('%H:%M:%S')}] ❌ Ошибка инициализации браузера: {e}")
+        return
+    
+    # Счетчики для периодического обновления страниц
+    refresh_counter = 0
+    REFRESH_INTERVAL = 30  # Обновлять страницы каждые 30 циклов (~1 минута)
+    
+    while True:
+        try:
+            start_time = time.time()
+            
+            # Периодически обновляем страницы (чтобы избежать устаревания кэша браузера)
+            refresh_counter += 1
+            if refresh_counter >= REFRESH_INTERVAL:
+                print(f"[{time.strftime('%H:%M:%S')}] 🔄 Периодическое обновление страниц...")
+                refresh_tasks = []
+                refresh_tasks.append(asyncio.create_task(persistent_browser.refresh_fissure_page()))
+                refresh_tasks.append(asyncio.create_task(persistent_browser.refresh_arbitration_page()))
+                await asyncio.gather(*refresh_tasks, return_exceptions=True)
+                refresh_counter = 0
+                print(f"[{time.strftime('%H:%M:%S')}] ✅ Страницы обновлены")
+            
+            # Быстрый скрапинг
+            await scrape_with_persistent_browser()
+            
+            # Агрессивный интервал - 2 секунды
+            elapsed = time.time() - start_time
+            sleep_time = max(1.0, SCRAPE_INTERVAL_SECONDS - elapsed)
+            await asyncio.sleep(sleep_time)
+            
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] 💥 Критическая ошибка в скрапинге: {e}")
+            
+            # Пытаемся восстановить браузер
+            try:
+                await persistent_browser.cleanup()
+                await asyncio.sleep(3)
+                await persistent_browser.start()
+                print(f"[{time.strftime('%H:%M:%S')}] ✅ Браузер восстановлен")
+            except Exception as restore_error:
+                print(f"[{time.strftime('%H:%M:%S')}] ❌ Не удалось восстановить браузер: {restore_error}")
+                await asyncio.sleep(5)
+
 # =================================================================
-# 8. КЭШ И ОПТИМИЗИРОВАННАЯ ЛОГИКА ОБНОВЛЕНИЯ КАНАЛОВ
+# 9. КЭШ И ОПТИМИЗИРОВАННАЯ ЛОГИКА ОБНОВЛЕНИЯ КАНАЛОВ
 # =================================================================
 
 class ChannelCache:
@@ -2478,29 +2567,16 @@ async def update_arbitration_channel(bot: commands.Bot):
     current_time = time.time()
     tier_missions = {}
 
-    # Запускаем все запросы последовательно в отдельных потоках
+    # Запускаем все запросы параллельно
+    tasks = []
     for tier in TIERS_TO_HIGHLIGHT:
-        try:
-            # Проверяем кэш
-            cached_mission = get_cached_tier_mission(tier)
-            if cached_mission:
-                tier_missions[tier] = cached_mission
-                continue
-                
-            # Если нет в кэше, делаем запрос
-            loop = asyncio.get_event_loop()
-            mission = await loop.run_in_executor(
-                executor,
-                sync_get_earliest_tier_mission,
-                tier,
-                current_time
-            )
-
-            if mission:
-                tier_missions[tier] = mission
-                set_cached_tier_mission(tier, mission)
-        except Exception as e:
-            print(f"[{time.strftime('%H:%M:%S')}] 🚨 Исключение при получении {tier}-тира: {e}")
+        tasks.append(get_tier_mission(tier, current_time))
+    
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    for i, tier in enumerate(TIERS_TO_HIGHLIGHT):
+        if i < len(results) and results[i] and not isinstance(results[i], Exception):
+            tier_missions[tier] = results[i]
 
     for tier in TIERS_TO_HIGHLIGHT:
         tier_emoji = TIER_EMOJIS_FINAL.get(tier, tier)
@@ -2636,13 +2712,12 @@ async def update_steel_path_channel(bot: commands.Bot):
 
     await send_or_edit_message('LAST_STEEL_MESSAGE_ID', sp_channel, embed, view=lfg_view)
 
-def sync_get_earliest_tier_mission(tier: str, current_scrape_time: float) -> Optional[Dict[str, Any]]:
-    """Синхронно получает ближайшую миссию определенного тира с сайта с кэшированием."""
+async def get_tier_mission(tier: str, current_scrape_time: float) -> Optional[Dict[str, Any]]:
+    """Асинхронно получает ближайшую миссию определенного тира."""
     
     # Сначала проверяем кэш
     cached_mission = get_cached_tier_mission(tier)
     if cached_mission:
-        print(f"[{time.strftime('%H:%M:%S')}] 🔄 Используем кэшированные данные для {tier}-тира")
         return cached_mission
     
     tier_urls = {
@@ -2653,96 +2728,51 @@ def sync_get_earliest_tier_mission(tier: str, current_scrape_time: float) -> Opt
 
     url = tier_urls.get(tier)
     if not url:
-        print(f"[{time.strftime('%H:%M:%S')}] ⚠️ Нет URL для тира {tier}")
         return None
 
-    print(f"[{time.strftime('%H:%M:%S')}] 🔍 Начинаем загрузку {tier}-тира по URL: {url}")
-
     try:
-        from playwright.sync_api import sync_playwright as sync_playwright_sync
+        # Создаем временную страницу для получения тира
+        page = await persistent_browser.context.new_page()
+        await page.set_default_timeout(10000)
         
-        with sync_playwright_sync() as p:
-            browser = p.chromium.launch(headless=True)
-            print(f"[{time.strftime('%H:%M:%S')}]   -> Браузер запущен для {tier}-тира")
+        await page.goto(url, wait_until="networkidle", timeout=10000)
+        await page.wait_for_selector('#log', timeout=8000)
+        
+        content = await page.content()
+        await page.close()
+        
+        soup = BeautifulSoup(content, 'html.parser')
+        schedule = parse_arbitration_schedule(soup, current_scrape_time)
 
-            context = browser.new_context(
-                viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            )
+        # Возвращаем текущую или следующую миссию
+        current = schedule.get("Current", {})
+        upcoming = schedule.get("Upcoming", [])
 
-            page = context.new_page()
-            page.set_default_timeout(20000)  # Уменьшили таймаут
+        mission_result = None
 
-            print(f"[{time.strftime('%H:%M:%S')}]   -> Загрузка страницы для {tier}-тира...")
-            response = page.goto(url, wait_until="domcontentloaded", timeout=20000)
+        # Если есть текущая активная миссия нужного тира
+        if current.get('Node') != 'N/A' and current.get('Tier', '').upper() == tier:
+            mission_result = current
 
-            if not response or response.status != 200:
-                print(f"[{time.strftime('%H:%M:%S')}] ⚠️ Не удалось загрузить страницу для {tier}-тира, статус: {response.status if response else 'нет ответа'}")
-                page.close()
-                context.close()
-                browser.close()
-                return None
+        # Ищем первую upcoming миссию нужного тира
+        if not mission_result:
+            for mission in upcoming:
+                if mission.get('Tier', '').upper() == tier:
+                    mission_result = mission
+                    break
 
-            print(f"[{time.strftime('%H:%M:%S')}]   -> Страница загружена, ожидаем элемент #log...")
-            try:
-                page.wait_for_selector('#log', timeout=15000)
-                print(f"[{time.strftime('%H:%M:%S')}]   -> Элемент #log найден")
-            except Exception as e:
-                print(f"[{time.strftime('%H:%M:%S')}] ⚠️ Элемент #log не найден для {tier}-тира: {e}")
-                # Попробуем взять контент даже если #log не найден
-                print(f"[{time.strftime('%H:%M:%S')}]   -> Пытаемся получить контент страницы...")
+        if mission_result:
+            # Сохраняем в кэш
+            set_cached_tier_mission(tier, mission_result)
 
-            time.sleep(0.5)  # Уменьшили задержку
-
-            content = page.content()
-
-            page.close()
-            context.close()
-            browser.close()
-
-            soup = BeautifulSoup(content, 'html.parser')
-
-            # Используем существующую функцию парсинга
-            schedule = parse_arbitration_schedule(soup, current_scrape_time)
-
-            # Возвращаем текущую или следующую миссию
-            current = schedule.get("Current", {})
-            upcoming = schedule.get("Upcoming", [])
-
-            print(f"[{time.strftime('%H:%M:%S')}]   -> Для {tier}-тира найдено: текущих - {1 if current.get('Node') != 'N/A' else 0}, upcoming - {len(upcoming)}")
-
-            mission_result = None
-
-            # Если есть текущая активная миссия нужного тира
-            if current.get('Node') != 'N/A' and current.get('Tier', '').upper() == tier:
-                print(f"[{time.strftime('%H:%M:%S')}]   -> Найден текущий {tier}-тир: {current.get('Node')}")
-                mission_result = current
-
-            # Ищем первую upcoming миссию нужного тира
-            if not mission_result:
-                for mission in upcoming:
-                    if mission.get('Tier', '').upper() == tier:
-                        print(f"[{time.strftime('%H:%M:%S')}]   -> Найден upcoming {tier}-тир: {mission.get('Location')} в {mission.get('StartTimeDisplay')}")
-                        mission_result = mission
-                        break
-
-            if mission_result:
-                # Сохраняем в кэш
-                set_cached_tier_mission(tier, mission_result)
-                print(f"[{time.strftime('%H:%M:%S')}]   -> {tier}-тир сохранен в кэш")
-            else:
-                print(f"[{time.strftime('%H:%M:%S')}] ⚠️ {tier}-тир не найден на странице")
-
-            return mission_result
+        return mission_result
 
     except Exception as e:
-        print(f"[{time.strftime('%H:%M:%S')}] 🚨 Критическая ошибка при получении {tier}-тира: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"[{time.strftime('%H:%M:%S')}] 🚨 Ошибка при получении {tier}-тира: {e}")
         return None
 
 # =================================================================
-# 9. ОСНОВНОЙ КОД БОТА И КОМАНДЫ
+# 10. ОСНОВНОЙ КОД БОТА И КОМАНДЫ
 # =================================================================
 
 intents = discord.Intents.default()
@@ -2754,6 +2784,33 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Удаляем стандартную команду help, чтобы использовать свою
 bot.remove_command('help')
+
+@tasks.loop(seconds=MISSION_UPDATE_INTERVAL_SECONDS)
+async def mission_update_task():
+    """Задача для периодического обновления Discord-сообщений при обнаружении изменений."""
+
+    if LAST_SCRAPE_TIME > 0:
+        global LAST_CHANGES, CHANGES_LOCK
+
+        changes_to_process = {}
+        with CHANGES_LOCK:
+            changes_to_process = LAST_CHANGES.copy()
+            for key in LAST_CHANGES:
+                LAST_CHANGES[key] = False
+
+        if changes_to_process.get("ArbitrationSchedule"):
+            print(f"[{time.strftime('%H:%M:%S')}] 📢 Обновление канала арбитража (обнаружены изменения)...")
+            await update_arbitration_channel(bot)
+
+        if changes_to_process.get("Fissures"):
+            print(f"[{time.strftime('%H:%M:%S')}] 📢 Обновление канала обычных разрывов (обнаружены изменения)...")
+            await update_normal_fissure_channel(bot)
+
+        if changes_to_process.get("SteelPathFissures"):
+            print(f"[{time.strftime('%H:%M:%S')}] 📢 Обновление канала разрывов стального пути (обнаружены изменения)...")
+            await update_steel_path_channel(bot)
+    else:
+        print(f"[{time.strftime('%H:%M:%S')}] ⏳ Ожидание первого успешного скрапинга...")
 
 @tasks.loop(seconds=30)
 async def update_monitoring_task():
@@ -2767,24 +2824,26 @@ async def on_ready():
 
     resolve_custom_emojis(bot)
 
-    # Запускаем HTTP сервер для health check и авто-пинга
+    # Запускаем HTTP сервер для health check
     try:
         await health_server.start()
         print("✅ Health сервер запущен")
     except Exception as e:
         print(f"❌ Ошибка запуска health сервера: {e}")
 
-    # Запускаем реалтайм мониторинг
-    try:
-        await real_time_monitor.start()
-    except Exception as e:
-        print(f"❌ Ошибка запуска реалтайм мониторинга: {e}")
-        # Fallback: можно запустить старый скрапинг если нужно
-        print(f"⚠️ Используем режим fallback - без реалтайм мониторинга")
+    # ЗАМЕНА: Запускаем агрессивный непрерывный скрапинг
+    asyncio.create_task(aggressive_continuous_scraping())
 
     # Запускаем задачу мониторинга
     if not update_monitoring_task.is_running():
         update_monitoring_task.start()
+
+    # Запускаем задачу проверки изменений с более частым интервалом
+    if not mission_update_task.is_running():
+        mission_update_task.start()
+    
+    # Уменьшаем интервал обновления сообщений
+    mission_update_task.change_interval(seconds=MISSION_UPDATE_INTERVAL_SECONDS)
 
     # Отправляем сообщение в канал логов если он настроен
     log_channel_id = CONFIG.get('LOG_CHANNEL_ID')
@@ -2793,7 +2852,7 @@ async def on_ready():
         if log_channel:
             embed = discord.Embed(
                 title="🟢 Бот запущен",
-                description=f"Бот **{bot.user}** успешно запущен в **режиме реалтайм мониторинга**.",
+                description=f"Бот **{bot.user}** успешно запущен в режиме реального времени.",
                 color=0x00FF00,
                 timestamp=datetime.now(timezone.utc)
             )
@@ -2801,15 +2860,15 @@ async def on_ready():
             embed.add_field(name="🏓 Пинг", value=f"`{round(bot.latency * 1000)}ms`", inline=True)
             embed.add_field(name="📊 Серверов", value=f"`{len(bot.guilds)}`", inline=True)
             embed.add_field(name="👥 Пользователей", value=f"`{len(bot.users)}`", inline=True)
-            embed.add_field(name="⚡ Режим", value="Реалтайм мониторинг (5с)", inline=False)
+            embed.add_field(name="⚡ Режим", value="Агрессивный скрапинг (2 секунды)", inline=False)
             embed.add_field(name="🌐 Render URL", value=RENDER_URL if RENDER_URL else "Не настроен", inline=False)
             embed.add_field(name="🔄 Авто-пинг", value="Включен (каждые 5 минут)", inline=False)
-            embed.add_field(name="📡 Мониторинг", value="Браузер запущен, слежение активно", inline=False)
-            embed.set_footer(text="Система мониторинга Warframe LFG Bot v2.0")
+            embed.add_field(name="🌐 Браузер", value="🟢 Постоянный (Chrome)", inline=False)
+            embed.set_footer(text="Система мониторинга Warframe LFG Bot")
             await log_channel.send(embed=embed)
 
 # =================================================================
-# 10. КОМАНДЫ БОТА (ОПТИМИЗИРОВАННЫЕ)
+# 11. КОМАНДЫ БОТА (ОПТИМИЗИРОВАННЫЕ)
 # =================================================================
 
 @bot.command(name='command', aliases=['commands', 'help'])
@@ -2853,8 +2912,6 @@ async def command_list(ctx):
             "`!command` или `!commands` или `!help` - Показать этот список команд\n"
             "`!force_update` - Принудительно обновить все каналы\n"
             "`!ping_self` - Пингнуть себя для предотвращения сна (Render.com)\n"
-            "`!monitor_status` - Показать статус реалтайм мониторинга\n"
-            "`!restart_monitor` - Перезапустить реалтайм мониторинг"
         ),
         inline=False
     )
@@ -2875,7 +2932,7 @@ async def command_list(ctx):
         inline=False
     )
 
-    embed.set_footer(text=f"Бот автоматически обновляет данные в режиме реалтайм (каждые 5 секунд)")
+    embed.set_footer(text=f"Бот автоматически обновляет данные каждые {SCRAPE_INTERVAL_SECONDS} секунд")
 
     await ctx.send(embed=embed)
 
@@ -3028,9 +3085,10 @@ async def status_command(ctx):
         scrape_info = "**Последний скрапинг:** Никогда\n"
 
     scrape_info += f"**Интервал скрапинга:** {SCRAPE_INTERVAL_SECONDS} секунд\n"
-    scrape_info += f"**Режим мониторинга:** Реалтайм (каждые 5с)\n"
+    scrape_info += f"**Интервал обновления:** {MISSION_UPDATE_INTERVAL_SECONDS} секунд\n"
     scrape_info += f"**Cache hits:** {SCRAPE_STATS['cache_hits']}\n"
-    scrape_info += f"**Cache misses:** {SCRAPE_STATS['cache_misses']}"
+    scrape_info += f"**Cache misses:** {SCRAPE_STATS['cache_misses']}\n"
+    scrape_info += f"**Браузер:** {'🟢 Активен' if persistent_browser.is_running else '🔴 Неактивен'}"
 
     embed.add_field(name="🔄 Скрапинг", value=scrape_info, inline=False)
 
@@ -3104,76 +3162,10 @@ async def ping_self_command(ctx):
     except Exception as e:
         await ctx.send(f"❌ Ошибка при пинге: {str(e)}", delete_after=10)
 
-@bot.command(name='monitor_status')
-@commands.has_permissions(manage_guild=True)
-async def monitor_status_command(ctx):
-    """Показывает статус реалтайм мониторинга."""
-    embed = discord.Embed(
-        title="📡 Статус реалтайм мониторинга",
-        color=0x00FF00 if real_time_monitor.is_running else 0xFF0000,
-        timestamp=datetime.now(timezone.utc)
-    )
-    
-    status = "🟢 **АКТИВЕН**" if real_time_monitor.is_running else "🔴 **ОСТАНОВЛЕН**"
-    
-    embed.add_field(name="Состояние", value=status, inline=False)
-    embed.add_field(name="Интервал проверки", value=f"{real_time_monitor.check_interval} секунд", inline=True)
-    
-    # Информация о браузере
-    browser_info = []
-    if real_time_monitor.browser:
-        browser_info.append("Браузер: ✅ Запущен")
-    else:
-        browser_info.append("Браузер: ❌ Не запущен")
-        
-    if real_time_monitor.fissures_page and not real_time_monitor.fissures_page.is_closed():
-        browser_info.append("Страница разрывов: ✅ Активна")
-    else:
-        browser_info.append("Страница разрывов: ❌ Неактивна")
-        
-    if real_time_monitor.arbitration_page and not real_time_monitor.arbitration_page.is_closed():
-        browser_info.append("Страница арбитража: ✅ Активна")
-    else:
-        browser_info.append("Страница арбитража: ❌ Неактивна")
-        
-    embed.add_field(name="Компоненты", value="\n".join(browser_info), inline=False)
-    
-    # Статистика скрапинга
-    embed.add_field(
-        name="📊 Статистика скрапинга",
-        value=(
-            f"Всего скрапов: {SCRAPE_STATS['total_scrapes']}\n"
-            f"Успешных: {SCRAPE_STATS['successful_scrapes']}\n"
-            f"Ошибок: {SCRAPE_STATS['failed_scrapes']}\n"
-            f"Последнее обновление: <t:{int(LAST_SCRAPE_TIME)}:R>" if LAST_SCRAPE_TIME > 0 else "Еще не обновлялось"
-        ),
-        inline=False
-    )
-    
-    embed.set_footer(text="Warframe LFG Bot - Реалтайм мониторинг")
-    await ctx.send(embed=embed)
-
-@bot.command(name='restart_monitor')
-@commands.has_permissions(manage_guild=True)
-async def restart_monitor_command(ctx):
-    """Перезапускает реалтайм мониторинг."""
-    await ctx.send("🔄 Перезапуск реалтайм мониторинга...", delete_after=10)
-    
-    try:
-        # Останавливаем старый мониторинг
-        if real_time_monitor.is_running:
-            await real_time_monitor.stop()
-            
-        # Запускаем новый
-        await real_time_monitor.start()
-        await ctx.send("✅ Реалтайм мониторинг перезапущен!", delete_after=10)
-        
-    except Exception as e:
-        await ctx.send(f"❌ Ошибка перезапуска мониторинга: {str(e)}", delete_after=10)
-
 if __name__ == '__main__':
     print(f"[{time.strftime('%H:%M:%S')}] Запуск бота...")
     print(f"[{time.strftime('%H:%M:%S')}] Render URL: {RENDER_URL}")
+    print(f"[{time.strftime('%H:%M:%S')}] Режим: Агрессивный скрапинг ({SCRAPE_INTERVAL_SECONDS} секунд)")
     
     try:
         bot.run(BOT_TOKEN)
