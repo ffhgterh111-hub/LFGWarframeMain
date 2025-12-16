@@ -42,7 +42,7 @@ ARBY_URL = 'https://browse.wf/arbys#days=30&tz=utc&hourfmt=24'
 FISSURE_URL = 'https://browse.wf/live'
 
 CONFIG_FILE = 'config.json'
-SCRAPE_INTERVAL_SECONDS = 5  # Быстрый интервал проверки
+SCRAPE_INTERVAL_SECONDS = 5  # Быстрый интервал проверк
 MISSION_UPDATE_INTERVAL_SECONDS = 30  # Интервал принудительного обновления
 MAX_FIELD_LENGTH = 1000
 
@@ -3182,3 +3182,4 @@ if __name__ == '__main__':
         import traceback
         traceback.print_exc()
 #[file content end]
+
