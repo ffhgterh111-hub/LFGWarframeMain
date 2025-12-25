@@ -54,6 +54,9 @@ FISSURE_CACHE = TTLCache(maxsize=10, ttl=120)
 # Кэш для тиров (30 минут)
 TIER_CACHE = TTLCache(maxsize=5, ttl=1800)
 
+# Временная зона МСК (UTC+3)
+MSK_TZ = timezone(timedelta(hours=3))
+
 # --- ГЛОБАЛЬНОЕ СОСТОЯНИЕ ---
 CURRENT_MISSION_STATE = {
     "ArbitrationSchedule": {},
@@ -388,6 +391,18 @@ def extract_faction_from_mission_description(description: str) -> Optional[str]:
 
     return None
 
+def get_msk_time_string() -> str:
+    """Возвращает текущее время в формате МСК (часы:минуты:секунды)."""
+    now_utc = datetime.now(timezone.utc)
+    now_msk = now_utc.astimezone(MSK_TZ)
+    return now_msk.strftime('%H:%M:%S')
+
+def get_msk_timestamp() -> int:
+    """Возвращает текущий timestamp в МСК."""
+    now_utc = datetime.now(timezone.utc)
+    now_msk = now_utc.astimezone(MSK_TZ)
+    return int(now_msk.timestamp())
+
 async def update_log_message(bot: commands.Bot):
     """Обновляет сообщение с мониторингом в канале логов."""
     log_channel_id = CONFIG.get('LOG_CHANNEL_ID')
@@ -438,7 +453,7 @@ async def update_log_message(bot: commands.Bot):
     # Собираем информацию о последней ошибке
     last_error_info = "Нет ошибок"
     if SCRAPE_STATS["last_error"] and SCRAPE_STATS["last_error_time"]:
-        error_time = datetime.fromtimestamp(SCRAPE_STATS["last_error_time"]).strftime('%H:%M:%S')
+        error_time = datetime.fromtimestamp(SCRAPE_STATS["last_error_time"]).astimezone(MSK_TZ).strftime('%H:%M:%S')
         last_error_info = f"**{error_time}:** {SCRAPE_STATS['last_error'][:100]}..."
 
     # Текущие данные
@@ -452,7 +467,7 @@ async def update_log_message(bot: commands.Bot):
         title="📊 МОНИТОРИНГ СИСТЕМЫ (РЕЖИМ РЕАЛТАЙМ)",
         description="Быстрый скрапинг каждые 5 секунд, мгновенное обновление",
         color=status_color,
-        timestamp=datetime.now(timezone.utc)
+        timestamp=datetime.now(MSK_TZ)
     )
 
     # Статус системы
@@ -529,7 +544,7 @@ async def update_log_message(bot: commands.Bot):
         inline=False
     )
 
-    embed.set_footer(text="Обновляется каждые 30 секунд | Warframe LFG Bot (Режим реалтайм)")
+    embed.set_footer(text=f"Обновляется каждые 30 секунд | Warframe LFG Bot (Режим реалтайм)")
 
     # Отправляем или редактируем сообщение
     try:
@@ -547,7 +562,7 @@ async def update_log_message(bot: commands.Bot):
         save_config()
 
     except Exception as e:
-        print(f"[{time.strftime('%H:%M:%S')}] ❌ Ошибка обновления сообщения мониторинга: {e}")
+        print(f"[{get_msk_time_string()}] ❌ Ошибка обновления сообщения мониторинга: {e}")
 
 def resolve_custom_emojis(bot: commands.Bot):
     """Находит все пользовательские эмодзи."""
@@ -907,7 +922,7 @@ class LFGTicketView(discord.ui.View):
         embed.add_field(name="Создатель:", value=self.initiator.mention, inline=True)
 
         # Добавляем время создания
-        embed.set_footer(text=f"Собрано: {datetime.now().strftime('%H:%M:%S')}")
+        embed.set_footer(text=f"Собрано: {datetime.now(MSK_TZ).strftime('%H:%M:%S')}")
 
         # Добавляем фото фракции (если удалось определить)
         faction_image = get_faction_image_url(faction_name)
@@ -1062,7 +1077,7 @@ class LFGTicketView(discord.ui.View):
         if self.comment:
             embed.add_field(name="📝 Комментарий:", value=self.comment, inline=False)
 
-        embed.set_footer(text=f"Создан: {datetime.now().strftime('%H:%M:%S')} | Автоудаление через 1 час")
+        embed.set_footer(text=f"Создан: {datetime.now(MSK_TZ).strftime('%H:%M:%S')} | Автоудаление через 1 час")
 
         return embed
 
@@ -1668,7 +1683,7 @@ async def init_persistent_browser():
     """Инициализирует персистентный браузер Playwright."""
     global PLAYWRIGHT_BROWSER, PLAYWRIGHT_CONTEXT, PLAYWRIGHT_PLAYWRIGHT, BROWSER_INITIALIZED
     
-    print(f"[{time.strftime('%H:%M:%S')}] 🌐 Инициализация персистентного браузера...")
+    print(f"[{get_msk_time_string()}] 🌐 Инициализация персистентного браузера...")
     
     try:
         PLAYWRIGHT_PLAYWRIGHT = await async_playwright().start()
@@ -1695,11 +1710,11 @@ async def init_persistent_browser():
         PLAYWRIGHT_CONTEXT.set_default_timeout(15000)
         
         BROWSER_INITIALIZED = True
-        print(f"[{time.strftime('%H:%M:%S')}] ✅ Персистентный браузер инициализирован")
+        print(f"[{get_msk_time_string()}] ✅ Персистентный браузер инициализирован")
         return True
         
     except Exception as e:
-        print(f"[{time.strftime('%H:%M:%S')}] ❌ Ошибка инициализации браузера: {e}")
+        print(f"[{get_msk_time_string()}] ❌ Ошибка инициализации браузера: {e}")
         BROWSER_INITIALIZED = False
         return False
 
@@ -1720,7 +1735,7 @@ async def close_persistent_browser():
         PLAYWRIGHT_PLAYWRIGHT = None
     
     BROWSER_INITIALIZED = False
-    print(f"[{time.strftime('%H:%M:%S')}] 🌐 Персистентный браузер закрыт")
+    print(f"[{get_msk_time_string()}] 🌐 Персистентный браузер закрыт")
 
 def parse_arbitration_schedule(soup: BeautifulSoup, current_scrape_time: float) -> Dict[str, Any]:
     """Парсит данные о расписании Арбитражей."""
@@ -1730,7 +1745,6 @@ def parse_arbitration_schedule(soup: BeautifulSoup, current_scrape_time: float) 
     if not log_div: return schedule
 
     all_missions = log_div.find_all(['b', 'span'], attrs={'data-timestamp': True})
-    msk_tz = timezone(timedelta(hours=3))
     parsed_missions = []
 
     for tag in all_missions:
@@ -1758,7 +1772,7 @@ def parse_arbitration_schedule(soup: BeautifulSoup, current_scrape_time: float) 
             end_timestamp = start_timestamp + 3600
 
             utc_dt = datetime.fromtimestamp(start_timestamp, tz=timezone.utc)
-            msk_dt = utc_dt.astimezone(msk_tz)
+            msk_dt = utc_dt.astimezone(MSK_TZ)
             msk_start_time_display = msk_dt.strftime('%H:%M')
 
             parsed_missions.append({
@@ -1942,7 +1956,7 @@ async def scrape_fissures_fast():
             })
             
             # Переходим на страницу
-            print(f"[{time.strftime('%H:%M:%S')}] 🔄 Быстрый скрапинг разрывов...")
+            print(f"[{get_msk_time_string()}] 🔄 Быстрый скрапинг разрывов...")
             response = await page.goto(
                 FISSURE_URL,
                 wait_until="domcontentloaded",
@@ -1984,18 +1998,18 @@ async def scrape_fissures_fast():
                         next_sibling = h4.find_next_sibling('table')
                         if next_sibling:
                             normal_table = next_sibling
-                            print(f"[{time.strftime('%H:%M:%S')}]   -> Найдена таблица обычных разрывов")
+                            print(f"[{get_msk_time_string()}]   -> Найдена таблица обычных разрывов")
                     
                     # Ищем заголовок "Steel Path Fissures"
                     elif "Steel Path Fissures" in h4_text:
                         next_sibling = h4.find_next_sibling('table')
                         if next_sibling:
                             sp_table = next_sibling
-                            print(f"[{time.strftime('%H:%M:%S')}]   -> Найдена таблица SP разрывов")
+                            print(f"[{get_msk_time_string()}]   -> Найдена таблица SP разрывов")
                     
                     # Ищем заголовок "Void Storms (Railjack)" - ЭТО НЕ ОБЫЧНЫЕ РАЗРЫВЫ!
                     elif "Void Storms (Railjack)" in h4_text:
-                        print(f"[{time.strftime('%H:%M:%S')}]   -> Пропущена таблица Void Storms (Railjack)")
+                        print(f"[{get_msk_time_string()}]   -> Пропущена таблица Void Storms (Railjack)")
                 
                 # Если не нашли по заголовкам, ищем таблицы по содержимому
                 if not normal_table or not sp_table:
@@ -2009,28 +2023,28 @@ async def scrape_fissures_fast():
                             'Railjack' not in table_html and 'Void Storm' not in table_html and
                             not normal_table):
                             normal_table = table
-                            print(f"[{time.strftime('%H:%M:%S')}]   -> Найдена таблица обычных разрывов (по содержимому)")
+                            print(f"[{get_msk_time_string()}]   -> Найдена таблица обычных разрывов (по содержимому)")
                         
                         # SP РАЗРЫВЫ: содержат "Steel Path" или "SP-"
                         elif (('Steel Path' in table_html or 'SP-' in table_html or 
                                'sp-fissures' in table_html.lower()) and not sp_table):
                             sp_table = table
-                            print(f"[{time.strftime('%H:%M:%S')}]   -> Найдена таблица SP разрывов (по содержимому)")
+                            print(f"[{get_msk_time_string()}]   -> Найдена таблица SP разрывов (по содержимому)")
                 
                 # Парсим найденные таблицы
                 if normal_table:
                     normal_fissures = parse_fissure_table(normal_table, current_scrape_time, False)
                     results["Fissures"] = normal_fissures
-                    print(f"[{time.strftime('%H:%M:%S')}]   -> Обычные разрывы: {len(normal_fissures)}")
+                    print(f"[{get_msk_time_string()}]   -> Обычные разрывы: {len(normal_fissures)}")
                 else:
-                    print(f"[{time.strftime('%H:%M:%S')}]   ⚠️ Таблица обычных разрывов не найдена!")
+                    print(f"[{get_msk_time_string()}]   ⚠️ Таблица обычных разрывов не найдена!")
                 
                 if sp_table:
                     sp_fissures = parse_fissure_table(sp_table, current_scrape_time, True)
                     results["SteelPathFissures"] = sp_fissures
-                    print(f"[{time.strftime('%H:%M:%S')}]   -> Разрывы SP: {len(sp_fissures)}")
+                    print(f"[{get_msk_time_string()}]   -> Разрывы SP: {len(sp_fissures)}")
                 else:
-                    print(f"[{time.strftime('%H:%M:%S')}]   ⚠️ Таблица SP разрывов не найдена!")
+                    print(f"[{get_msk_time_string()}]   ⚠️ Таблица SP разрывов не найдена!")
             
             await page.close()
             
@@ -2039,7 +2053,7 @@ async def scrape_fissures_fast():
                 SCRAPE_STATS["successful_scrapes"] += 1
                 
         except Exception as e:
-            print(f"[{time.strftime('%H:%M:%S')}] ⚠️ Ошибка быстрого скрапинга разрывов: {e}")
+            print(f"[{get_msk_time_string()}] ⚠️ Ошибка быстрого скрапинга разрывов: {e}")
             SCRAPE_STATS["failed_scrapes"] += 1
             SCRAPE_STATS["fissures_errors"] += 1
         
@@ -2063,7 +2077,7 @@ async def scrape_arbitration_fast():
             await page.set_viewport_size({'width': 1920, 'height': 1080})
             page.set_default_timeout(10000)
             
-            print(f"[{time.strftime('%H:%M:%S')}] 🔄 Быстрый скрапинг арбитража...")
+            print(f"[{get_msk_time_string()}] 🔄 Быстрый скрапинг арбитража...")
             
             response = await page.goto(
                 ARBY_URL,
@@ -2089,7 +2103,7 @@ async def scrape_arbitration_fast():
                 
                 arb_tier = arbitration_data.get("Current", {}).get("Tier", "N/A")
                 arb_node = arbitration_data.get("Current", {}).get("Node", "N/A")
-                print(f"[{time.strftime('%H:%M:%S')}]   -> Арбитраж: {arb_tier} ({arb_node})")
+                print(f"[{get_msk_time_string()}]   -> Арбитраж: {arb_tier} ({arb_node})")
                 
                 # Увеличиваем статистику успешных скрапов
                 if arb_node != "N/A":
@@ -2100,7 +2114,7 @@ async def scrape_arbitration_fast():
             await page.close()
             
         except Exception as e:
-            print(f"[{time.strftime('%H:%M:%S')}] ⚠️ Ошибка быстрого скрапинга арбитража: {e}")
+            print(f"[{get_msk_time_string()}] ⚠️ Ошибка быстрого скрапинга арбитража: {e}")
             SCRAPE_STATS["failed_scrapes"] += 1
             SCRAPE_STATS["arbitration_errors"] += 1
         
@@ -2108,7 +2122,7 @@ async def scrape_arbitration_fast():
 
 async def fast_scraping_cycle():
     """Цикл быстрого скрапинга с интервалом 5 секунд."""
-    print(f"[{time.strftime('%H:%M:%S')}] 🚀 Запуск быстрого скрапинга (5 секунд)...")
+    print(f"[{get_msk_time_string()}] 🚀 Запуск быстрого скрапинга (5 секунд)...")
     
     # Инициализируем браузер при старте
     await init_persistent_browser()
@@ -2133,7 +2147,7 @@ async def fast_scraping_cycle():
             
             # Обрабатываем результаты
             if isinstance(fissures_result, Exception):
-                print(f"[{time.strftime('%H:%M:%S')}] ❌ Ошибка в скрапинге разрывов: {fissures_result}")
+                print(f"[{get_msk_time_string()}] ❌ Ошибка в скрапинге разрывов: {fissures_result}")
                 fissures_result = {"Fissures": [], "SteelPathFissures": []}
                 SCRAPE_STATS["failed_scrapes"] += 1
                 SCRAPE_STATS["fissures_errors"] += 1
@@ -2141,7 +2155,7 @@ async def fast_scraping_cycle():
                 SCRAPE_STATS["last_error_time"] = time.time()
             
             if isinstance(arbitration_result, Exception):
-                print(f"[{time.strftime('%H:%M:%S')}] ❌ Ошибка в скрапинге арбитража: {arbitration_result}")
+                print(f"[{get_msk_time_string()}] ❌ Ошибка в скрапинге арбитража: {arbitration_result}")
                 arbitration_result = {"Current": {}, "Upcoming": []}
                 SCRAPE_STATS["failed_scrapes"] += 1
                 SCRAPE_STATS["arbitration_errors"] += 1
@@ -2167,9 +2181,9 @@ async def fast_scraping_cycle():
                 current_arb.get('Tier') != old_arb.get('Tier') or
                 current_arb.get('IsActive') != old_arb.get('IsActive')):
                 
-                print(f"[{time.strftime('%H:%M:%S')}] 📢 Обнаружено изменение арбитража!")
-                print(f"[{time.strftime('%H:%M:%S')}]   Старое: {old_arb.get('Node', 'N/A')} ({old_arb.get('Tier', 'N/A')})")
-                print(f"[{time.strftime('%H:%M:%S')}]   Новое: {current_arb.get('Node', 'N/A')} ({current_arb.get('Tier', 'N/A')})")
+                print(f"[{get_msk_time_string()}] 📢 Обнаружено изменение арбитража!")
+                print(f"[{get_msk_time_string()}]   Старое: {old_arb.get('Node', 'N/A')} ({old_arb.get('Tier', 'N/A')})")
+                print(f"[{get_msk_time_string()}]   Новое: {current_arb.get('Node', 'N/A')} ({current_arb.get('Tier', 'N/A')})")
                 changes_detected = True
                 LAST_CHANGES["ArbitrationSchedule"] = True
             
@@ -2178,8 +2192,8 @@ async def fast_scraping_cycle():
             new_fissures_hash = hash(str(sorted(combined_results.get("Fissures", []), key=lambda x: x.get('Location', ''))))
             
             if old_fissures_hash != new_fissures_hash:
-                print(f"[{time.strftime('%H:%M:%S')}] 📢 Обнаружено изменение обычных разрывов!")
-                print(f"[{time.strftime('%H:%M:%S')}]   Старое: {len(CURRENT_MISSION_STATE.get('Fissures', []))}, Новое: {len(combined_results.get('Fissures', []))}")
+                print(f"[{get_msk_time_string()}] 📢 Обнаружено изменение обычных разрывов!")
+                print(f"[{get_msk_time_string()}]   Старое: {len(CURRENT_MISSION_STATE.get('Fissures', []))}, Новое: {len(combined_results.get('Fissures', []))}")
                 changes_detected = True
                 LAST_CHANGES["Fissures"] = True
             
@@ -2187,8 +2201,8 @@ async def fast_scraping_cycle():
             new_sp_hash = hash(str(sorted(combined_results.get("SteelPathFissures", []), key=lambda x: x.get('Location', ''))))
             
             if old_sp_hash != new_sp_hash:
-                print(f"[{time.strftime('%H:%M:%S')}] 📢 Обнаружено изменение разрывов SP!")
-                print(f"[{time.strftime('%H:%M:%S')}]   Старое: {len(CURRENT_MISSION_STATE.get('SteelPathFissures', []))}, Новое: {len(combined_results.get('SteelPathFissures', []))}")
+                print(f"[{get_msk_time_string()}] 📢 Обнаружено изменение разрывов SP!")
+                print(f"[{get_msk_time_string()}]   Старое: {len(CURRENT_MISSION_STATE.get('SteelPathFissures', []))}, Новое: {len(combined_results.get('SteelPathFissures', []))}")
                 changes_detected = True
                 LAST_CHANGES["SteelPathFissures"] = True
             
@@ -2197,7 +2211,7 @@ async def fast_scraping_cycle():
             
             # Если обнаружены изменения, немедленно обновляем каналы
             if changes_detected:
-                print(f"[{time.strftime('%H:%M:%S')}] ⚡ Немедленное обновление каналов...")
+                print(f"[{get_msk_time_string()}] ⚡ Немедленное обновление каналов...")
                 
                 tasks = []
                 if LAST_CHANGES.get("ArbitrationSchedule"):
@@ -2223,13 +2237,13 @@ async def fast_scraping_cycle():
             
             # Если скрапинг занял больше интервала, запускаем следующий сразу
             if elapsed > SCRAPE_INTERVAL_SECONDS:
-                print(f"[{time.strftime('%H:%M:%S')}] ⚡ Скрапинг занял {elapsed:.1f}с, пропускаем паузу")
+                print(f"[{get_msk_time_string()}] ⚡ Скрапинг занял {elapsed:.1f}с, пропускаем паузу")
                 continue
             
             await asyncio.sleep(sleep_time)
             
         except Exception as e:
-            print(f"[{time.strftime('%H:%M:%S')}] 💥 Критическая ошибка в быстром скрапинге: {e}")
+            print(f"[{get_msk_time_string()}] 💥 Критическая ошибка в быстром скрапинге: {e}")
             SCRAPE_STATS["failed_scrapes"] += 1
             SCRAPE_STATS["last_error"] = str(e)
             SCRAPE_STATS["last_error_time"] = time.time()
@@ -2340,9 +2354,9 @@ async def send_or_edit_message(message_id_key: str, channel: discord.TextChannel
         save_config()
 
     except discord.Forbidden:
-        print(f"[{time.strftime('%H:%M:%S')}] ❌ Нет прав для отправки/редактирования в канале {channel.name}.")
+        print(f"[{get_msk_time_string()}] ❌ Нет прав для отправки/редактирования в канале {channel.name}.")
     except Exception as e:
-        print(f"[{time.strftime('%H:%M:%S')}] 🚨 Ошибка при обновлении канала {channel.name}: {e}")
+        print(f"[{get_msk_time_string()}] 🚨 Ошибка при обновлении канала {channel.name}: {e}")
 
 def format_fissure_list_vertical(fissures: List[Dict[str, Any]]) -> str:
     """Форматирует список всех разрывов с правильным разделением."""
@@ -2449,32 +2463,39 @@ async def update_arbitration_channel(bot: commands.Bot):
     if target_ts:
         time_line = f"завершится <t:{int(target_ts)}:R>" if is_active else f"начнется <t:{int(target_ts)}:R>"
 
-    # ВАЖНО: Всегда формируем упоминание роли в основном сообщении
-    content_to_send: Optional[str] = None
+    # Получаем название ноды для поиска роли
     node_name = current_arb.get('Node', '').split(',')[0].strip()
-
-    # Получаем роль для текущей карты
-    role_mention = ""
-    if node_name and arb_channel.guild:
-        # Сначала проверяем MAP_ROLES
-        map_role_id = CONFIG.get('MAP_ROLES', {}).get(node_name)
-        if map_role_id:
-            role = arb_channel.guild.get_role(map_role_id)
-            if role:
-                role_mention = f"{role.mention} "
-        else:
-            # Ищем роль по имени
-            role = discord.utils.get(arb_channel.guild.roles, name=node_name)
-            if role:
-                role_mention = f"{role.mention} "
+    
+    # Создаем уведомление о смене карты
+    content_to_send = None
+    old_arb = PREVIOUS_MISSION_STATE.get("ArbitrationSchedule", {}).get("Current", {})
+    old_node = old_arb.get('Node', '').split(',')[0].strip() if old_arb else None
+    
+    # Если нода изменилась и это не первое обновление, делаем упоминание
+    if node_name and old_node and node_name != old_node:
+        role_mention = ""
+        if arb_channel.guild:
+            # Сначала проверяем MAP_ROLES
+            map_role_id = CONFIG.get('MAP_ROLES', {}).get(node_name)
+            if map_role_id:
+                role = arb_channel.guild.get_role(map_role_id)
+                if role:
+                    role_mention = f"{role.mention} "
+            else:
+                # Ищем роль по имени
+                role = discord.utils.get(arb_channel.guild.roles, name=node_name)
+                if role:
+                    role_mention = f"{role.mention} "
 
         # Если есть роль для упоминания, добавляем в контент
         if role_mention:
-            content_to_send = f"{role_mention}"
+            content_to_send = f"{role_mention}📢 **Сменилась карта арбитража!** Теперь доступна: **{node_name}** ({embed_tier}-тир)"
 
     embed = discord.Embed(
         title=f"{vitus_emoji}{vitus_emoji}{vitus_emoji} РАСПИСАНИЕ АРБИТРАЖЕЙ {vitus_emoji}{vitus_emoji}{vitus_emoji}",
-        url="https://browse.wf/arbys", color=embed_color
+        url="https://browse.wf/arbys", 
+        color=embed_color,
+        timestamp=datetime.now(MSK_TZ)
     )
 
     if current_arb.get("Name"):
@@ -2534,18 +2555,18 @@ async def update_arbitration_channel(bot: commands.Bot):
     # Запускаем все запросы последовательно
     for tier in TIERS_TO_HIGHLIGHT:
         try:
-            print(f"[{time.strftime('%H:%M:%S')}] 🔄 Начинаем запрос для {tier}-тира...")
+            print(f"[{get_msk_time_string()}] 🔄 Начинаем запрос для {tier}-тира...")
             
             # Используем существующий контекст браузера
             mission = await sync_get_earliest_tier_mission(tier, current_time)
             
             if mission:
-                print(f"[{time.strftime('%H:%M:%S')}] ✅ Получен {tier}-тир: {mission.get('Node', 'N/A')}")
+                print(f"[{get_msk_time_string()}] ✅ Получен {tier}-тир: {mission.get('Node', 'N/A')}")
                 tier_missions[tier] = mission
             else:
-                print(f"[{time.strftime('%H:%M:%S')}] ⚠️ Не удалось получить {tier}-тир")
+                print(f"[{get_msk_time_string()}] ⚠️ Не удалось получить {tier}-тир")
         except Exception as e:
-            print(f"[{time.strftime('%H:%M:%S')}] 🚨 Исключение при получении {tier}-тира: {e}")
+            print(f"[{get_msk_time_string()}] 🚨 Исключение при получении {tier}-тира: {e}")
 
     for tier in TIERS_TO_HIGHLIGHT:
         tier_emoji = TIER_EMOJIS_FINAL.get(tier, tier)
@@ -2565,11 +2586,6 @@ async def update_arbitration_channel(bot: commands.Bot):
             # Получаем timestamp
             timestamp = mission.get('TargetTimestamp', mission.get('StartTimestamp', current_time))
 
-            # Форматируем дату и время (день.месяц в (часы:минуты))
-            dt = datetime.fromtimestamp(timestamp, timezone(timedelta(hours=3)))  # МСК время
-            date_str = dt.strftime("%d.%m")
-            time_str = dt.strftime("%H:%M")
-
             # Определяем, активна ли миссия сейчас
             is_mission_active = mission.get('IsActive', False)
 
@@ -2577,6 +2593,9 @@ async def update_arbitration_channel(bot: commands.Bot):
                 time_display = f"**СЕЙЧАС**\n(завершится <t:{int(timestamp)}:R>)"
             else:
                 # Форматируем вывод как "15.12 в (7:00)"
+                msk_dt = datetime.fromtimestamp(timestamp, MSK_TZ)
+                date_str = msk_dt.strftime("%d.%m")
+                time_str = msk_dt.strftime("%H:%M")
                 time_display = f"**{date_str}** в **({time_str})**\n(<t:{int(timestamp)}:R>)"
 
             field_value = (
@@ -2588,7 +2607,7 @@ async def update_arbitration_channel(bot: commands.Bot):
             # Если тир не найден
             embed.add_field(name=field_name, value="Нет в расписании", inline=True)
 
-    embed.set_footer(text=f"Обновлено: {time.strftime('%H:%M:%S')} | Данные: browse.wf/arbys | Время: МСК (UTC+3) | Режим: реалтайм")
+    embed.set_footer(text=f"Обновлено: {get_msk_time_string()} | Данные: browse.wf/arbys | Время: МСК (UTC+3) | Режим: реалтайм")
 
     # Проверяем, нужно ли обновлять
     if not await channel_cache.should_update_channel("arbitration", embed):
@@ -2623,13 +2642,14 @@ async def update_normal_fissure_channel(bot: commands.Bot):
 
     embed = discord.Embed(
         title=title_text,
-        color=0x00CCFF
+        color=0x00CCFF,
+        timestamp=datetime.now(MSK_TZ)
     )
 
     for name, value in fields:
         embed.add_field(name=name, value=value, inline=False)
 
-    embed.set_footer(text=f"Обновлено: {time.strftime('%H:%M:%S')} | Данные: browse.wf | Режим: реалтайм")
+    embed.set_footer(text=f"Обновлено: {get_msk_time_string()} | Данные: browse.wf | Режим: реалтайм")
 
     # Проверяем, нужно ли обновлять
     if not await channel_cache.should_update_channel("fissure", embed):
@@ -2665,13 +2685,14 @@ async def update_steel_path_channel(bot: commands.Bot):
 
     embed = discord.Embed(
         title=title_text,
-        color=0x00CCFF
+        color=0x00CCFF,
+        timestamp=datetime.now(MSK_TZ)
     )
 
     for name, value in fields:
         embed.add_field(name=name, value=value, inline=False)
 
-    embed.set_footer(text=f"Обновлено: {time.strftime('%H:%M:%S')} | Данные: browse.wf | Режим: реалтайм")
+    embed.set_footer(text=f"Обновлено: {get_msk_time_string()} | Данные: browse.wf | Режим: реалтайм")
 
     # Проверяем, нужно ли обновлять
     if not await channel_cache.should_update_channel("steel_path", embed):
@@ -2743,7 +2764,7 @@ async def sync_get_earliest_tier_mission(tier: str, current_scrape_time: float) 
             return mission_result
             
         except Exception as e:
-            print(f"[{time.strftime('%H:%M:%S')}] 🚨 Ошибка при получении {tier}-тира: {e}")
+            print(f"[{get_msk_time_string()}] 🚨 Ошибка при получении {tier}-тира: {e}")
             return None
 
 # =================================================================
@@ -2774,18 +2795,18 @@ async def mission_update_task():
                 LAST_CHANGES[key] = False
 
         if changes_to_process.get("ArbitrationSchedule"):
-            print(f"[{time.strftime('%H:%M:%S')}] 📢 Обновление канала арбитража (обнаружены изменения)...")
+            print(f"[{get_msk_time_string()}] 📢 Обновление канала арбитража (обнаружены изменения)...")
             await update_arbitration_channel(bot)
 
         if changes_to_process.get("Fissures"):
-            print(f"[{time.strftime('%H:%M:%S')}] 📢 Обновление канала обычных разрывов (обнаружены изменения)...")
+            print(f"[{get_msk_time_string()}] 📢 Обновление канала обычных разрывов (обнаружены изменения)...")
             await update_normal_fissure_channel(bot)
 
         if changes_to_process.get("SteelPathFissures"):
-            print(f"[{time.strftime('%H:%M:%S')}] 📢 Обновление канала разрывов стального пути (обнаружены изменения)...")
+            print(f"[{get_msk_time_string()}] 📢 Обновление канала разрывов стального пути (обнаружены изменения)...")
             await update_steel_path_channel(bot)
     else:
-        print(f"[{time.strftime('%H:%M:%S')}] ⏳ Ожидание первого успешного скрапинга...")
+        print(f"[{get_msk_time_string()}] ⏳ Ожидание первого успешного скрапинга...")
 
 @tasks.loop(seconds=30)
 async def update_monitoring_task():
@@ -2826,7 +2847,7 @@ async def on_ready():
                 title="🟢 Бот запущен (РЕЖИМ РЕАЛТАЙМ)",
                 description=f"Бот **{bot.user}** успешно запущен в режиме реалтайм скрапинга.",
                 color=0x00FF00,
-                timestamp=datetime.now(timezone.utc)
+                timestamp=datetime.now(MSK_TZ)
             )
             embed.add_field(name="🆔 ID бота", value=f"`{bot.user.id}`", inline=True)
             embed.add_field(name="🏓 Пинг", value=f"`{round(bot.latency * 1000)}ms`", inline=True)
@@ -2848,8 +2869,9 @@ async def command_list(ctx):
     """Показывает список всех доступных команд бота."""
     embed = discord.Embed(
         title="📚 Список команд бота (РЕЖИМ РЕАЛТАЙМ)",
-        description="Все доступные команды для управления ботом",
-        color=0x00CCFF
+        description="Все доступные команды для управления бота",
+        color=0x00CCFF,
+        timestamp=datetime.now(MSK_TZ)
     )
 
     # Настройка каналов
@@ -3004,7 +3026,7 @@ async def set_log_channel(ctx, channel: discord.TextChannel = None):
         title="📊 Система мониторинга бота (РЕЖИМ РЕАЛТАЙМ)",
         description="Этот канал предназначен для логов и мониторинга состояния бота.",
         color=0x00FF00,
-        timestamp=datetime.now(timezone.utc)
+        timestamp=datetime.now(MSK_TZ)
     )
 
     embed.add_field(name="🟢 Статус", value="Бот активен (режим реалтайм)", inline=True)
@@ -3057,11 +3079,11 @@ async def status_command(ctx):
     embed = discord.Embed(
         title="📊 Состояние бота (РЕЖИМ РЕАЛТАЙМ)",
         color=0x00FF00,
-        timestamp=datetime.now(timezone.utc)
+        timestamp=datetime.now(MSK_TZ)
     )
 
     # Информация о скрапинге
-    last_scrape_time = datetime.fromtimestamp(LAST_SCRAPE_TIME, timezone.utc) if LAST_SCRAPE_TIME > 0 else None
+    last_scrape_time = datetime.fromtimestamp(LAST_SCRAPE_TIME, MSK_TZ) if LAST_SCRAPE_TIME > 0 else None
     scrape_info = ""
     if LAST_SCRAPE_TIME > 0:
         scrape_info = f"**Последний скрапинг:** <t:{int(LAST_SCRAPE_TIME)}:R>\n"
@@ -3166,10 +3188,10 @@ async def clear_cache_command(ctx):
     await ctx.send("✅ Кэши очищены, браузер перезапущен!", delete_after=5)
 
 if __name__ == '__main__':
-    print(f"[{time.strftime('%H:%M:%S')}] 🚀 Запуск бота в режиме реалтайм...")
-    print(f"[{time.strftime('%H:%M:%S')}] Render URL: {RENDER_URL}")
-    print(f"[{time.strftime('%H:%M:%S')}] Интервал скрапинга: {SCRAPE_INTERVAL_SECONDS} секунд")
-    print(f"[{time.strftime('%H:%M:%S')}] Режим: Быстрый скрапинг с персистентным браузером")
+    print(f"[{get_msk_time_string()}] 🚀 Запуск бота в режиме реалтайм...")
+    print(f"[{get_msk_time_string()}] Render URL: {RENDER_URL}")
+    print(f"[{get_msk_time_string()}] Интервал скрапинга: {SCRAPE_INTERVAL_SECONDS} секунд")
+    print(f"[{get_msk_time_string()}] Режим: Быстрый скрапинг с персистентным браузером")
     
     try:
         bot.run(BOT_TOKEN)
@@ -3182,4 +3204,3 @@ if __name__ == '__main__':
         import traceback
         traceback.print_exc()
 #[file content end]
-
